@@ -77,11 +77,31 @@ use an authenticated allowance. This is general web discovery, not a licensed
 real-estate feed: snippets may be incomplete or stale, so every normalized listing
 retains its source URL and excerpt and missing financial data routes to research.
 
+## Deal pipeline dashboard
+
+Opening `/app/` also shows a persistent deal pipeline below the search form. Every
+persisted deal appears with a six-step stage tracker, a status badge (`Needs your
+approval`, `In progress`, `Needs research`, `Dormant`, `Completed`, `Rejected`),
+and a Deal Score badge with gross yield and monthly cash flow when the Investment
+Analyst produced them. Deals waiting for a human decision render the matching
+approval panel: shortlist decisions, contact selection, outreach editing, the
+simulated broker-reply form, and out-of-policy schedule approvals. Approving
+outreach always asks for confirmation before it sends through the configured
+gateway (currently the local fake gateway). Dormant `awaiting_followup` deals
+display a clear note and expose no resume controls. See `docs/api.md` for the
+derived `status`, `pending_approval_type`, and `diagnostic` response fields.
+
+The UI under `sites/propertyscout-ui/dist/` is hand-authored static HTML, CSS, and
+JavaScript. There is no frontend build step; edit those files directly.
+
 This milestone is intended for localhost development. It has no authentication,
 authorization, rate limiting, or encrypted transport and must not be exposed to a
 public network.
 
-The analysis is deliberately deterministic. An LLM will replace selected reasoning steps only after the routing and approval behavior is tested.
+Financial calculations and graph routing stay deterministic in Python. When
+`PROPERTYSCOUT_LLM_ENABLED=true`, the web API injects the Nebius model for the
+qualitative investment judgment and the meeting brief; otherwise both fall back
+to deterministic templates.
 
 After shortlist approval, the graph now runs a fixture-backed Contact Researcher. One high-confidence result is selected automatically; zero results stop for further research; multiple plausible results pause for human resolution. No real personal data or enrichment API is used yet.
 

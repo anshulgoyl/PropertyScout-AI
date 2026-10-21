@@ -32,12 +32,58 @@ curl -X POST http://127.0.0.1:8000/deals \
   -d '{"property_key":"shortlist"}'
 ```
 
-The response contains four useful sections:
+The response contains seven useful sections:
 
 - `thread_id`: stable identity used for later requests.
 - `state`: the latest validated `DealState` encoded as JSON.
 - `next_nodes`: graph nodes eligible to execute next.
 - `interrupts`: the human input currently required.
+- `status`: derived dashboard status (see below).
+- `pending_approval_type`: which approval panel the UI should render, or `null`.
+- `diagnostic`: explanation payload for unknown or failed terminal states, otherwise `null`.
+
+`GET /deals` lists the most recently created thread first.
+
+## Deal status
+
+The status is derived in `propertyscout.api.derive_workflow_status`, in this priority
+order:
+
+1. A pending interrupt wins everything: the deal is `waiting_human`, even when the
+   state contains historical error records. `pending_approval_type` comes from the
+   interrupt's `approval_type`, or `input_type` for the simulated broker reply.
+2. `current_stage == "failed"` reports `failed` (reserved for unrecoverable paths;
+   no workflow node sets it today).
+3. If the graph still has queued nodes, the deal is `running`.
+4. Otherwise the graph has ended and the terminal `outcome` maps to a dashboard
+   status: `completed` (`brief_ready`), `rejected` (`scout_rejected`,
+   `analysis_rejected`, `shortlist_rejected`, `outreach_rejected`,
+   `outreach_revision_requested`, `contact_not_found`, `broker_declined`,
+   `schedule_rejected`), `needs_research`, or `awaiting_followup`.
+5. An unrecognized terminal outcome reports `unknown` with a `diagnostic` payload
+   naming the outcome and stage.
+
+Errors in state are append-only history. They never change the status; the UI shows
+them only as an advisory note.
+
+`awaiting_followup` deals are dormant: the broker asked a question or answered
+inconclusively, so no further automated action happens and resuming returns HTTP 409.
+
+## Resume payloads by interrupt type
+
+The nodes validate each payload; invalid input returns HTTP 422.
+
+| Interrupt | Payload |
+| --- | --- |
+| `shortlist` | `{"decision": "approved" \| "rejected" \| "revision_requested", "decided_by": "…", "feedback": "…"}` (only `decision` required) |
+| `contact_resolution` | `{"contact_id": "<uuid from the interrupt candidates>"}` |
+| `outreach` | `{"decision": "approved" \| "rejected" \| "revision_requested", "subject": "…", "body": "…"}` — on `approved`, `subject`/`body` override the draft and must not be blank |
+| `inbound_reply` | `{"message_id": "…", "sender_email": "…", "received_at": "ISO datetime", "body": "…", "proposed_times": ["ISO datetime"]}` — the sender must match the selected contact |
+| `schedule_exception` | `{"decision": "approved" \| "rejected"}` |
+
+Note that `outreach` decisions other than `approved` are terminal in the current
+graph: rejected and revision-requested drafts end the workflow instead of looping
+back into drafting.
 
 ## Resume shortlist approval
 
