@@ -45,7 +45,12 @@ def list_sqlite_thread_ids(database_path: str | Path) -> list[str]:
         if table_exists is None:
             return []
         rows = connection.execute(
-            "SELECT DISTINCT thread_id FROM checkpoints ORDER BY thread_id"
+            """
+            SELECT thread_id
+            FROM checkpoints
+            GROUP BY thread_id
+            ORDER BY MAX(rowid) DESC
+            """
         ).fetchall()
         return [row[0] for row in rows]
     finally:

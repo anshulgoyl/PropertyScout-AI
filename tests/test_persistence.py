@@ -1,7 +1,7 @@
 from langgraph.types import Command
 
 from propertyscout.bootstrap import initial_state
-from propertyscout.persistence import open_sqlite_graph
+from propertyscout.persistence import list_sqlite_thread_ids, open_sqlite_graph
 from propertyscout.schemas import WorkflowStage
 
 
@@ -28,3 +28,17 @@ def test_sqlite_checkpoint_resumes_after_graph_is_reopened(tmp_path) -> None:
     assert resumed["current_stage"] == WorkflowStage.CONTACT_RESEARCH
     assert resumed["approvals"]["shortlist"].decided_by == "restart-test"
     assert sum(event.action == "deal_initialized" for event in resumed["audit_events"]) == 1
+
+
+def test_list_sqlite_thread_ids_orders_most_recent_first(tmp_path) -> None:
+    database_path = tmp_path / "ordering.sqlite"
+    first_config = {"configurable": {"thread_id": "deal-first"}}
+    second_config = {"configurable": {"thread_id": "deal-second"}}
+
+    with open_sqlite_graph(database_path) as graph:
+        graph.invoke(initial_state("reject"), first_config)
+
+    with open_sqlite_graph(database_path) as graph:
+        graph.invoke(initial_state("reject"), second_config)
+
+    assert list_sqlite_thread_ids(database_path) == ["deal-second", "deal-first"]
