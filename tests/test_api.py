@@ -434,3 +434,23 @@ def test_schedule_exception_rejection_is_terminal_rejected(tmp_path) -> None:
 
     assert resumed["status"] == "rejected"
     assert resumed["state"]["outcome"] == "schedule_rejected"
+
+
+def test_ui_dashboard_section_is_served(tmp_path) -> None:
+    client = fixture_client(tmp_path)
+
+    page = client.get("/app/")
+    assert page.status_code == 200
+    assert 'id="dashboard"' in page.text
+    assert 'id="deal-grid"' in page.text
+    assert 'id="refresh-deals"' in page.text
+
+    script = client.get("/app/app.js")
+    assert script.status_code == 200
+    assert "loadDeals" in script.text
+    assert "Deal Score" in script.text
+    assert "schedule_exception" in script.text
+
+    stylesheet = client.get("/app/styles.css")
+    assert stylesheet.status_code == 200
+    assert ".approval-panel" in stylesheet.text

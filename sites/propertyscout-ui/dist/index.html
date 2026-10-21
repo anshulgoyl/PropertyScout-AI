@@ -134,6 +134,16 @@
         </div>
         <div id="result-grid" class="result-grid"></div>
       </section>
+
+      <section id="dashboard" class="results" aria-live="polite">
+        <div class="results-heading">
+          <div><p class="eyebrow">Deal pipeline</p><h2>Your deals</h2></div>
+          <button type="button" id="refresh-deals" class="ghost-button">Refresh</button>
+        </div>
+        <p id="deal-count" class="deal-count" role="status"></p>
+        <p id="dashboard-empty" class="empty-note" hidden></p>
+        <div id="deal-grid" class="deal-grid"></div>
+      </section>
     </main>
 
     <script src="app.js" defer></script>

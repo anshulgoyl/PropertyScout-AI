@@ -107,3 +107,48 @@ button:disabled { opacity: .55; cursor: wait; }
   .form-actions button { width: 100%; }
   .process-card ol { grid-template-columns: 1fr 1fr; }
 }
+
+/* Deal pipeline dashboard */
+
+.ghost-button { min-height: 40px; padding: 0 16px; background: white; color: var(--green-dark); border: 1px solid var(--line); font-size: 13px; }
+.ghost-button:hover { background: var(--green-soft); }
+.deal-count { margin: 0 0 18px; color: var(--muted); font-size: 13px; }
+.empty-note { padding: 24px; color: var(--muted); background: var(--card); border: 1px dashed var(--line); border-radius: 12px; }
+.deal-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.deal-card { padding: 24px; box-shadow: none; display: grid; gap: 14px; align-content: start; }
+
+.status.running { background: #e7f0fa; color: #2b5e94; }
+.status.waiting { background: #fff2dc; color: var(--amber); }
+.status.done { background: var(--green-soft); color: var(--green-dark); }
+.status.dormant { background: #eceff4; color: #4a5568; }
+.status.failed, .status.unknown { background: #f7e9e7; color: var(--red); }
+
+.deal-metrics { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+.score-badge { padding: 5px 10px; border-radius: 99px; background: var(--ink); color: white; font-weight: 800; font-size: 12px; }
+
+.stage-tracker { display: flex; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.stage-tracker li { flex: 1; display: grid; gap: 6px; justify-items: center; font-size: 10px; color: var(--muted); text-align: center; }
+.stage-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--line); }
+.stage-tracker li.done .stage-dot { background: var(--green); }
+.stage-tracker li.active .stage-dot { background: var(--amber); box-shadow: 0 0 0 4px #fff2dc; }
+.stage-tracker li.active { color: var(--ink); font-weight: 700; }
+
+.approval-panel { padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: #fbfcfb; display: grid; gap: 10px; }
+.approval-panel strong { font-size: 13px; }
+.approval-panel p { margin: 0; font-size: 13px; color: var(--muted); }
+.approval-panel small { color: var(--muted); font-size: 11px; }
+.approval-panel label { font-size: 12px; gap: 6px; }
+.approval-panel input, .approval-panel select, .approval-panel textarea { height: auto; padding: 8px 10px; }
+.approval-panel textarea { min-height: 64px; resize: vertical; }
+.approval-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.approval-actions button { min-height: 38px; padding: 0 14px; font-size: 13px; gap: 0; }
+.approval-actions .reject { background: #b0524a; }
+.approval-actions .reject:hover { background: #8f3d36; }
+.approval-actions .neutral { background: #6b7570; }
+.approval-actions .neutral:hover { background: #565e5a; }
+.card-error { margin: 0; }
+.approval-panel.diagnostic { border-color: #e3c58f; }
+
+@media (max-width: 880px) {
+  .deal-grid { grid-template-columns: 1fr; }
+}

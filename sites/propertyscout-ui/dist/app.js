@@ -5,6 +5,12 @@ const resultsSection = document.querySelector("#results");
 const resultGrid = document.querySelector("#result-grid");
 const resultCount = document.querySelector("#result-count");
 
+const dealGrid = document.querySelector("#deal-grid");
+const dealCount = document.querySelector("#deal-count");
+const dashboardSection = document.querySelector("#dashboard");
+const dashboardEmpty = document.querySelector("#dashboard-empty");
+const refreshButton = document.querySelector("#refresh-deals");
+
 const cleanOptionalNumber = (data, name) => {
   const value = data.get(name);
   return value === "" ? null : Number(value);
@@ -27,51 +33,345 @@ function requestFromForm() {
   };
 }
 
-const statusClass = (outcome) => {
-  if (outcome?.includes("rejected")) return "rejected";
-  if (outcome === "needs_research") return "research";
-  return "";
-};
-
 const humanize = (value = "in progress") => value.replaceAll("_", " ");
 
-function renderDeals(deals) {
-  resultCount.textContent = `${deals.length} listings reviewed`;
-  if (deals.length === 0) {
-    const empty = document.createElement("article");
-    empty.className = "result-card empty-result";
-    empty.innerHTML = `
-      <div class="result-meta"><span>Live search complete</span></div>
-      <h3>No reliable listings found</h3>
-      <p>Keenable returned no public purchase pages with enough structured data to validate. Try a broader postcode, price, or size.</p>`;
-    resultGrid.replaceChildren(empty);
-    resultsSection.hidden = false;
-    resultsSection.scrollIntoView({ behavior: "smooth", block: "start" });
+const escapeHtml = (value) =>
+  String(value ?? "").replace(/[&<>"']/g, (ch) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]
+  ));
+
+const STATUS_META = {
+  waiting_human: { label: "Needs your approval", cls: "waiting" },
+  running: { label: "In progress", cls: "running" },
+  completed: { label: "Completed", cls: "done" },
+  rejected: { label: "Rejected", cls: "rejected" },
+  needs_research: { label: "Needs research", cls: "research" },
+  awaiting_followup: { label: "Dormant · awaiting follow-up", cls: "dormant" },
+  failed: { label: "Failed", cls: "failed" },
+  unknown: { label: "Needs review", cls: "unknown" },
+};
+
+const STATUS_PRIORITY = {
+  waiting_human: 0,
+  running: 1,
+  needs_research: 2,
+  awaiting_followup: 3,
+  unknown: 3,
+  completed: 4,
+  rejected: 5,
+  failed: 6,
+};
+
+const STEPS = ["Scout", "Analyse", "Approve", "Contact", "Outreach", "Schedule"];
+
+const STAGE_TO_STEP = {
+  initialized: 0,
+  discovery: 0,
+  analysis: 1,
+  awaiting_shortlist_approval: 2,
+  contact_research: 2,
+  awaiting_contact_resolution: 2,
+  outreach_drafting: 3,
+  awaiting_outreach_approval: 3,
+  awaiting_reply: 4,
+  scheduling: 4,
+  meeting_preparation: 5,
+  complete: 6,
+  failed: 0,
+};
+
+const readError = async (response) => {
+  try {
+    const body = await response.json();
+    if (Array.isArray(body.detail)) {
+      return body.detail.map((item) => item.msg).join("; ");
+    }
+    return typeof body.detail === "string" ? body.detail : response.statusText;
+  } catch {
+    return response.statusText;
+  }
+};
+
+const percent = (value) => (value == null ? "—" : `${(value * 100).toFixed(1)}%`);
+const euros = (money) => (money ? `${money.currency} ${money.amount.toLocaleString()}` : "—");
+
+function stageTracker(stage) {
+  const activeIndex = STAGE_TO_STEP[stage] ?? 0;
+  const items = STEPS.map((name, index) => {
+    const cls = index < activeIndex ? "done" : index === activeIndex ? "active" : "";
+    return `<li class="${cls}"><span class="stage-dot" aria-hidden="true"></span><small>${name}</small></li>`;
+  });
+  return `<ol class="stage-tracker" aria-label="Workflow progress">${items.join("")}</ol>`;
+}
+
+const propertyMetrics = (property) => `
+  <div class="metric">
+    <span>${property.room_count ?? "—"} rooms · ${property.living_area_sqm ?? "—"} m²</span>
+    <span>${euros(property.asking_price)}</span>
+  </div>`;
+
+const missingDataPanel = (analysis, status) =>
+  status === "needs_research" && analysis.missing_critical_data?.length
+    ? `<div class="approval-panel diagnostic"><strong>Missing critical data</strong><p>${escapeHtml(analysis.missing_critical_data.map(humanize).join(", "))}</p></div>`
+    : "";
+
+const diagnosticPanel = (deal) => {
+  if (!deal.diagnostic) return "";
+  const lines = Object.entries(deal.diagnostic)
+    .map(([key, value]) => `${humanize(key)}: ${typeof value === "string" ? value : JSON.stringify(value)}`)
+    .join(" · ");
+  return `<div class="approval-panel diagnostic"><strong>Diagnostic information</strong><p>${escapeHtml(lines)}</p></div>`;
+};
+
+function approvalPanelHTML(deal) {
+  if (deal.status !== "waiting_human") return "";
+  const type = deal.pending_approval_type;
+  const interrupt = deal.interrupts?.[0] || {};
+
+  if (type === "shortlist") {
+    return `
+      <div class="approval-panel" data-approval="shortlist">
+        <strong>Shortlist approval</strong>
+        <p>${escapeHtml(interrupt.analysis?.thesis || "Review this candidate for your shortlist.")}</p>
+        <label>Feedback <small>optional</small><textarea class="feedback" rows="2" placeholder="Optional feedback"></textarea></label>
+        <div class="approval-actions">
+          <button type="button" class="approve" data-decision="approved">Approve</button>
+          <button type="button" class="reject" data-decision="rejected">Reject</button>
+          <button type="button" class="neutral" data-decision="revision_requested">Request revision</button>
+        </div>
+      </div>`;
+  }
+
+  if (type === "contact_resolution") {
+    const options = (interrupt.candidates || []).map((candidate) => {
+      const label = candidate.name || candidate.organization || "Unknown contact";
+      const confidence = Math.round((candidate.confidence || 0) * 100);
+      const email = candidate.email ? ` · ${candidate.email}` : "";
+      return `<option value="${escapeHtml(candidate.contact_id)}">${escapeHtml(`${label} · ${confidence}% confidence${email}`)}</option>`;
+    });
+    return `
+      <div class="approval-panel" data-approval="contact_resolution">
+        <strong>Resolve contact</strong>
+        <p>Several plausible contacts were found. Pick the one to approach.</p>
+        <label>Contact<select class="contact-select">${options}</select></label>
+        <div class="approval-actions">
+          <button type="button" class="approve" data-action="resolve">Use this contact</button>
+        </div>
+      </div>`;
+  }
+
+  if (type === "outreach") {
+    return `
+      <div class="approval-panel" data-approval="outreach">
+        <strong>Outreach approval</strong>
+        <p>Recipient: ${escapeHtml(interrupt.draft?.recipient_email || "unknown")}</p>
+        <label>Subject<input class="draft-subject" /></label>
+        <label>Body<textarea class="draft-body" rows="6"></textarea></label>
+        <div class="approval-actions">
+          <button type="button" class="approve" data-decision="approved">Approve &amp; send</button>
+          <button type="button" class="reject" data-decision="rejected">Reject</button>
+          <button type="button" class="neutral" data-decision="revision_requested">Request revision</button>
+        </div>
+        <small>Approval sends the message through the configured gateway (currently the local fake gateway) after your confirmation.</small>
+      </div>`;
+  }
+
+  if (type === "inbound_reply") {
+    return `
+      <div class="approval-panel" data-approval="inbound_reply">
+        <strong>Broker reply (simulated)</strong>
+        <p>The workflow is waiting for a reply from ${escapeHtml(interrupt.expected_sender_email || "the broker")}. Reply ingestion is simulated through this form.</p>
+        <label>Sender email<input class="reply-sender" /></label>
+        <label>Message<textarea class="reply-body" rows="3"></textarea></label>
+        <label>Proposed times <small>optional, comma-separated ISO datetimes</small><input class="reply-times" placeholder="2026-10-24T10:00:00+02:00" /></label>
+        <div class="approval-actions">
+          <button type="button" class="approve" data-action="send-reply">Record reply</button>
+        </div>
+      </div>`;
+  }
+
+  if (type === "schedule_exception") {
+    const meeting = interrupt.meeting || {};
+    return `
+      <div class="approval-panel" data-approval="schedule_exception">
+        <strong>Out-of-policy meeting</strong>
+        <p>${escapeHtml(interrupt.reason || "Proposed time is outside configured availability")}</p>
+        <p>Proposed: ${escapeHtml(meeting.starts_at || "unknown time")}${meeting.timezone ? ` (${escapeHtml(meeting.timezone)})` : ""}</p>
+        <div class="approval-actions">
+          <button type="button" class="approve" data-decision="approved">Approve anyway</button>
+          <button type="button" class="reject" data-decision="rejected">Reject</button>
+        </div>
+      </div>`;
+  }
+
+  return "";
+}
+
+function dealCard(deal) {
+  const state = deal.state || {};
+  const property = state.property || {};
+  const analysis = state.analysis || {};
+  const meta = STATUS_META[deal.status] || STATUS_META.unknown;
+  const card = document.createElement("article");
+  card.className = "result-card deal-card";
+  card.dataset.threadId = deal.thread_id;
+
+  const summary =
+    state.scout_assessment?.reasons?.join(" · ") ||
+    analysis.thesis ||
+    property.description ||
+    "Awaiting agent processing.";
+  const score = analysis.score;
+  const yieldValue = analysis.metrics?.gross_yield;
+  const cashFlow = analysis.metrics?.monthly_cash_flow;
+
+  card.innerHTML = `
+    <div class="result-meta">
+      <span>${escapeHtml(property.postal_code || property.city || "")}</span>
+      <span class="status ${meta.cls}">${meta.label}</span>
+    </div>
+    <h3>${escapeHtml(property.title || "Untitled property")}</h3>
+    <div class="deal-metrics">
+      <span class="score-badge">Deal Score ${score == null ? "—" : `${score}/100`}</span>
+      <span>${percent(yieldValue)} gross yield</span>
+      <span>${cashFlow ? `${euros(cashFlow)}/mo` : "—"}</span>
+    </div>
+    <p>${escapeHtml(summary)}</p>
+    ${stageTracker(state.current_stage)}
+    ${propertyMetrics(property)}
+    ${missingDataPanel(analysis, deal.status)}
+    ${approvalPanelHTML(deal)}
+    ${diagnosticPanel(deal)}
+    <p class="card-error error" hidden></p>`;
+  wireApprovalPanel(card, deal);
+  return card;
+}
+
+function wireApprovalPanel(card, deal) {
+  const panel = card.querySelector(".approval-panel:not(.diagnostic)");
+  if (!panel) return;
+  const threadId = deal.thread_id;
+  const interrupt = deal.interrupts?.[0] || {};
+  const kind = panel.dataset.approval;
+  const send = (payload, confirmMessage) =>
+    resumeDeal(threadId, payload, confirmMessage, card);
+
+  if (kind === "shortlist") {
+    panel.querySelectorAll("[data-decision]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const feedback = panel.querySelector(".feedback").value.trim();
+        send({
+          decision: button.dataset.decision,
+          decided_by: "dashboard",
+          ...(feedback ? { feedback } : {}),
+        });
+      });
+    });
+  }
+
+  if (kind === "contact_resolution") {
+    panel.querySelector("[data-action='resolve']").addEventListener("click", () => {
+      send({ contact_id: panel.querySelector(".contact-select").value });
+    });
+  }
+
+  if (kind === "outreach") {
+    const subjectInput = panel.querySelector(".draft-subject");
+    const bodyInput = panel.querySelector(".draft-body");
+    subjectInput.value = interrupt.draft?.subject || "";
+    bodyInput.value = interrupt.draft?.body || "";
+    panel.querySelectorAll("[data-decision]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const decision = button.dataset.decision;
+        const payload = { decision, decided_by: "dashboard" };
+        if (decision === "approved") {
+          payload.subject = subjectInput.value;
+          payload.body = bodyInput.value;
+        }
+        const confirmMessage = decision === "approved"
+          ? `Approving will send the outreach email to ${interrupt.draft?.recipient_email || "the selected contact"} through the configured gateway (currently the local fake gateway). Continue?`
+          : null;
+        send(payload, confirmMessage);
+      });
+    });
+  }
+
+  if (kind === "inbound_reply") {
+    panel.querySelector(".reply-sender").value = interrupt.expected_sender_email || "";
+    panel.querySelector("[data-action='send-reply']").addEventListener("click", () => {
+      const times = panel.querySelector(".reply-times").value
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      send({
+        message_id: `manual-${Date.now()}`,
+        sender_email: panel.querySelector(".reply-sender").value.trim(),
+        received_at: new Date().toISOString(),
+        body: panel.querySelector(".reply-body").value.trim(),
+        ...(times.length ? { proposed_times: times } : {}),
+      });
+    });
+  }
+
+  if (kind === "schedule_exception") {
+    panel.querySelectorAll("[data-decision]").forEach((button) => {
+      button.addEventListener("click", () => {
+        send({ decision: button.dataset.decision, decided_by: "dashboard" });
+      });
+    });
+  }
+}
+
+async function resumeDeal(threadId, payload, confirmMessage, card) {
+  if (confirmMessage && !window.confirm(confirmMessage)) return;
+  const cardError = card.querySelector(".card-error");
+  cardError.hidden = true;
+  try {
+    const response = await fetch(`/deals/${threadId}/resume`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ response: payload }),
+    });
+    if (!response.ok) throw new Error(await readError(response));
+    await loadDeals();
+  } catch (error) {
+    cardError.textContent = error.message;
+    cardError.hidden = false;
+  }
+}
+
+function renderDashboard(deals) {
+  const sorted = [...deals].sort(
+    (a, b) => (STATUS_PRIORITY[a.status] ?? 9) - (STATUS_PRIORITY[b.status] ?? 9)
+  );
+  dealCount.textContent = `${deals.length} deal${deals.length === 1 ? "" : "s"} tracked`;
+  if (sorted.length === 0) {
+    dealGrid.replaceChildren();
+    dashboardEmpty.textContent = "No deals yet. Start a property search above to create deals.";
+    dashboardEmpty.hidden = false;
     return;
   }
-  resultGrid.replaceChildren(...deals.map((deal) => {
-    const state = deal.state;
-    const property = state.property;
-    const outcome = state.outcome || "awaiting review";
-    const yieldValue = state.analysis?.metrics?.gross_yield;
-    const card = document.createElement("article");
-    card.className = "result-card";
-    card.innerHTML = `
-      <div class="result-meta">
-        <span>${property.postal_code || property.city}</span>
-        <span class="status ${statusClass(outcome)}">${humanize(outcome)}</span>
-      </div>
-      <h3>${property.title}</h3>
-      <p>${state.scout_assessment?.reasons?.join(" · ") || state.analysis?.thesis || "Criteria match ready for review."}</p>
-      <div class="metric">
-        <span>${property.room_count ?? "—"} rooms · ${property.living_area_sqm ?? "—"} m²</span>
-        <strong>${yieldValue == null ? "—" : `${(yieldValue * 100).toFixed(1)}% yield`}</strong>
-      </div>`;
-    return card;
-  }));
-  resultsSection.hidden = false;
-  resultsSection.scrollIntoView({ behavior: "smooth", block: "start" });
+  dashboardEmpty.hidden = true;
+  dealGrid.replaceChildren(...sorted.map(dealCard));
+  dashboardSection.hidden = false;
 }
+
+async function loadDeals() {
+  try {
+    const response = await fetch("/deals");
+    if (!response.ok) throw new Error("Could not load deals.");
+    const deals = await response.json();
+    renderDashboard(deals);
+  } catch (error) {
+    dealGrid.replaceChildren();
+    dashboardEmpty.textContent = error.message;
+    dashboardEmpty.hidden = false;
+    dashboardSection.hidden = false;
+  }
+}
+
+refreshButton.addEventListener("click", loadDeals);
+loadDeals();
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -88,7 +388,22 @@ form.addEventListener("submit", async (event) => {
     if (!response.ok) {
       throw new Error(body.detail?.[0]?.msg || body.detail || "The search could not be started.");
     }
-    renderDeals(body.deals);
+    if (body.deals.length === 0) {
+      resultCount.textContent = "0 listings reviewed";
+      const empty = document.createElement("article");
+      empty.className = "result-card empty-result";
+      empty.innerHTML = `
+        <div class="result-meta"><span>Live search complete</span></div>
+        <h3>No reliable listings found</h3>
+        <p>Keenable returned no public purchase pages with enough structured data to validate. Try a broader postcode, price, or size.</p>`;
+      resultGrid.replaceChildren(empty);
+      resultsSection.hidden = false;
+      resultsSection.scrollIntoView({ behavior: "smooth", block: "start" });
+    } else {
+      resultsSection.hidden = true;
+      await loadDeals();
+      dashboardSection.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
   } catch (error) {
     errorBox.textContent = error.message;
     errorBox.hidden = false;
