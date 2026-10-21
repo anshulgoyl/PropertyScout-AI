@@ -74,6 +74,9 @@ class DealView(BaseModel):
     state: dict[str, Any]
     next_nodes: list[str]
     interrupts: list[Any]
+    status: str
+    pending_approval_type: str | None = None
+    diagnostic: dict[str, Any] | None = None
 
 
 class SearchView(BaseModel):
@@ -85,6 +88,75 @@ def _config(thread_id: str) -> dict:
     return {"configurable": {"thread_id": thread_id}}
 
 
+TERMINAL_OUTCOME_STATUS: dict[str, str] = {
+    "brief_ready": "completed",
+    "scout_rejected": "rejected",
+    "analysis_rejected": "rejected",
+    "shortlist_rejected": "rejected",
+    "outreach_rejected": "rejected",
+    "contact_not_found": "rejected",
+    "broker_declined": "rejected",
+    "schedule_rejected": "rejected",
+    "outreach_revision_requested": "rejected",
+    "needs_research": "needs_research",
+    "awaiting_followup": "awaiting_followup",
+}
+
+
+def derive_workflow_status(
+    state: dict[str, Any],
+    interrupts: list[Any],
+    next_nodes: list[str],
+) -> tuple[str, str | None, dict[str, Any] | None]:
+    """Classify one persisted deal snapshot for dashboard display.
+
+    Returns ``(status, pending_approval_type, diagnostic)``. A pending interrupt
+    always wins: a paused deal is waiting for a human even when its state
+    contains historical error records. The ``failed`` stage is reserved for
+    unrecoverable paths and is never derived from the append-only error
+    history. Unknown terminal outcomes produce ``unknown`` plus a diagnostic
+    payload so the dashboard can explain what it cannot classify.
+    """
+
+    if interrupts:
+        first = interrupts[0] if isinstance(interrupts[0], dict) else {}
+        pending_type = first.get("approval_type") or first.get("input_type")
+        return "waiting_human", pending_type, None
+
+    if state.get("current_stage") == "failed":
+        return "failed", None, None
+
+    if next_nodes:
+        return "running", None, None
+
+    outcome = state.get("outcome")
+    if outcome is None:
+        return (
+            "failed",
+            None,
+            {
+                "reason": "graph ended without an outcome",
+                "current_stage": state.get("current_stage"),
+                "next_nodes": list(next_nodes),
+            },
+        )
+
+    mapped = TERMINAL_OUTCOME_STATUS.get(outcome)
+    if mapped is not None:
+        return mapped, None, None
+
+    return (
+        "unknown",
+        None,
+        {
+            "reason": "outcome is not in the terminal-outcome map",
+            "outcome": outcome,
+            "current_stage": state.get("current_stage"),
+            "next_nodes": list(next_nodes),
+        },
+    )
+
+
 def _deal_view(graph, thread_id: str) -> DealView:
     snapshot = graph.get_state(_config(thread_id))
     if not snapshot.values:
@@ -94,11 +166,22 @@ def _deal_view(graph, thread_id: str) -> DealView:
         for task in snapshot.tasks
         for interrupt in task.interrupts
     ]
+    state = jsonable_encoder(snapshot.values)
+    next_nodes = list(snapshot.next)
+    encoded_interrupts = jsonable_encoder(interrupts)
+    deal_status, pending_approval_type, diagnostic = derive_workflow_status(
+        state,
+        encoded_interrupts,
+        next_nodes,
+    )
     return DealView(
         thread_id=thread_id,
-        state=jsonable_encoder(snapshot.values),
-        next_nodes=list(snapshot.next),
-        interrupts=jsonable_encoder(interrupts),
+        state=state,
+        next_nodes=next_nodes,
+        interrupts=encoded_interrupts,
+        status=deal_status,
+        pending_approval_type=pending_approval_type,
+        diagnostic=diagnostic,
     )
 
 

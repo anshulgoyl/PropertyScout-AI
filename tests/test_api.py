@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from propertyscout.api import create_app
+from propertyscout.api import create_app, derive_workflow_status
 from propertyscout.market_search import FixtureListingSearchService
 
 
@@ -136,3 +136,301 @@ def test_postcode_filter_rejects_fixture_outside_target_area(tmp_path) -> None:
         deal["state"]["outcome"] == "scout_rejected"
         for deal in response.json()["deals"]
     )
+def test_deal_view_reports_waiting_human_with_pending_type(tmp_path) -> None:
+    client = fixture_client(tmp_path)
+
+    created = client.post("/deals", json={"property_key": "shortlist"}).json()
+
+    assert created["status"] == "waiting_human"
+    assert created["pending_approval_type"] == "shortlist"
+    assert created["diagnostic"] is None
+
+
+def test_terminal_reject_deal_reports_rejected_status(tmp_path) -> None:
+    client = fixture_client(tmp_path)
+
+    created = client.post("/deals", json={"property_key": "reject"}).json()
+
+    assert created["status"] == "rejected"
+    assert created["pending_approval_type"] is None
+    assert created["state"]["outcome"] == "scout_rejected"
+
+
+def test_terminal_research_deal_reports_needs_research_status(tmp_path) -> None:
+    client = fixture_client(tmp_path)
+
+    created = client.post("/deals", json={"property_key": "research"}).json()
+
+    assert created["status"] == "needs_research"
+    assert created["state"]["outcome"] == "needs_research"
+
+
+def test_status_advances_to_next_interrupt_after_approval(tmp_path) -> None:
+    client = fixture_client(tmp_path)
+    created = client.post("/deals", json={"property_key": "shortlist"}).json()
+
+    resumed = client.post(
+        f"/deals/{created['thread_id']}/resume",
+        json={"response": {"decision": "approved", "decided_by": "status-test"}},
+    ).json()
+
+    assert resumed["status"] == "waiting_human"
+    assert resumed["pending_approval_type"] == "contact_resolution"
+
+
+def test_interrupt_priority_ignores_historical_errors() -> None:
+    state = {
+        "current_stage": "analysis",
+        "errors": [
+            {
+                "node": "investment_analyst",
+                "error_type": "retryable",
+                "message": "recovered earlier",
+                "retryable": True,
+                "occurred_at": "2026-10-21T00:00:00Z",
+                "details": {},
+            }
+        ],
+    }
+
+    status, pending, diagnostic = derive_workflow_status(
+        state, [{"approval_type": "outreach"}], ["outreach_approval"]
+    )
+
+    assert status == "waiting_human"
+    assert pending == "outreach"
+    assert diagnostic is None
+
+
+def test_ended_graph_without_outcome_is_failed_with_diagnostic() -> None:
+    status, pending, diagnostic = derive_workflow_status(
+        {"current_stage": "analysis"}, [], []
+    )
+
+    assert status == "failed"
+    assert pending is None
+    assert diagnostic["reason"] == "graph ended without an outcome"
+
+
+def test_unknown_outcome_reports_diagnostic() -> None:
+    status, pending, diagnostic = derive_workflow_status(
+        {"outcome": "something_new", "current_stage": "complete"}, [], []
+    )
+
+    assert status == "unknown"
+    assert pending is None
+    assert diagnostic["outcome"] == "something_new"
+    assert diagnostic["reason"] == "outcome is not in the terminal-outcome map"
+
+
+def _advance_to_reply_interrupt(client: TestClient, thread_id: str) -> dict:
+    """Walk a shortlist fixture deal to the inbound-reply interrupt."""
+
+    resumed = client.post(
+        f"/deals/{thread_id}/resume",
+        json={"response": {"decision": "approved"}},
+    ).json()
+    with_email = [
+        candidate
+        for candidate in resumed["interrupts"][0]["candidates"]
+        if candidate["email"]
+    ]
+    contact_id = with_email[0]["contact_id"]
+    contact_email = with_email[0]["email"]
+
+    resumed = client.post(
+        f"/deals/{thread_id}/resume",
+        json={"response": {"contact_id": contact_id}},
+    ).json()
+    assert resumed["pending_approval_type"] == "outreach"
+
+    resumed = client.post(
+        f"/deals/{thread_id}/resume",
+        json={"response": {"decision": "approved"}},
+    ).json()
+    assert resumed["status"] == "waiting_human"
+    assert resumed["pending_approval_type"] == "inbound_reply"
+    assert resumed["interrupts"][0]["expected_sender_email"] == contact_email
+    return resumed
+
+
+def test_awaiting_followup_is_terminal_and_not_resumable(tmp_path) -> None:
+    client = fixture_client(tmp_path)
+    created = client.post("/deals", json={"property_key": "shortlist"}).json()
+    thread_id = created["thread_id"]
+
+    resumed = _advance_to_reply_interrupt(client, thread_id)
+    sender_email = resumed["interrupts"][0]["expected_sender_email"]
+
+    reply = {
+        "message_id": "reply-question-1",
+        "sender_email": sender_email,
+        "received_at": "2026-10-21T10:00:00Z",
+        "body": "Could you share more details about the renovation status?",
+    }
+    resumed = client.post(
+        f"/deals/{thread_id}/resume", json={"response": reply}
+    ).json()
+
+    assert resumed["status"] == "awaiting_followup"
+    assert resumed["state"]["outcome"] == "awaiting_followup"
+    assert resumed["interrupts"] == []
+
+    retry = client.post(f"/deals/{thread_id}/resume", json={"response": reply})
+    assert retry.status_code == 409
+
+
+def test_inbound_reply_from_unexpected_sender_is_rejected(tmp_path) -> None:
+    client = fixture_client(tmp_path)
+    created = client.post("/deals", json={"property_key": "shortlist"}).json()
+    thread_id = created["thread_id"]
+
+    resumed = _advance_to_reply_interrupt(client, thread_id)
+    sender_email = resumed["interrupts"][0]["expected_sender_email"]
+
+    forged_reply = {
+        "message_id": "reply-forged-1",
+        "sender_email": f"not-{sender_email}",
+        "received_at": "2026-10-21T10:00:00Z",
+        "body": "I can call you tomorrow.",
+    }
+    response = client.post(
+        f"/deals/{thread_id}/resume", json={"response": forged_reply}
+    )
+
+    assert response.status_code == 422
+
+
+def test_outreach_resume_accepts_subject_and_body_override(tmp_path) -> None:
+    client = fixture_client(tmp_path)
+    created = client.post("/deals", json={"property_key": "shortlist"}).json()
+    thread_id = created["thread_id"]
+
+    resumed = client.post(
+        f"/deals/{thread_id}/resume",
+        json={"response": {"decision": "approved"}},
+    ).json()
+    with_email = [
+        candidate
+        for candidate in resumed["interrupts"][0]["candidates"]
+        if candidate["email"]
+    ]
+    resumed = client.post(
+        f"/deals/{thread_id}/resume",
+        json={"response": {"contact_id": with_email[0]["contact_id"]}},
+    ).json()
+
+    resumed = client.post(
+        f"/deals/{thread_id}/resume",
+        json={
+            "response": {
+                "decision": "approved",
+                "subject": "Edited subject",
+                "body": "Edited body with the agreed viewing time.",
+            }
+        },
+    ).json()
+
+    assert resumed["state"]["outreach_draft"]["subject"] == "Edited subject"
+    assert (
+        resumed["state"]["outreach_draft"]["body"]
+        == "Edited body with the agreed viewing time."
+    )
+    assert resumed["state"]["outcome"] == "outreach_sent"
+    assert resumed["status"] == "waiting_human"
+    assert resumed["pending_approval_type"] == "inbound_reply"
+
+
+def test_outreach_resume_rejects_empty_edited_subject(tmp_path) -> None:
+    client = fixture_client(tmp_path)
+    created = client.post("/deals", json={"property_key": "shortlist"}).json()
+    thread_id = created["thread_id"]
+
+    resumed = client.post(
+        f"/deals/{thread_id}/resume",
+        json={"response": {"decision": "approved"}},
+    ).json()
+    with_email = [
+        candidate
+        for candidate in resumed["interrupts"][0]["candidates"]
+        if candidate["email"]
+    ]
+    resumed = client.post(
+        f"/deals/{thread_id}/resume",
+        json={"response": {"contact_id": with_email[0]["contact_id"]}},
+    ).json()
+
+    response = client.post(
+        f"/deals/{thread_id}/resume",
+        json={
+            "response": {
+                "decision": "approved",
+                "subject": "   ",
+            }
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_out_of_policy_reply_routes_to_schedule_exception_then_completes(
+    tmp_path,
+) -> None:
+    client = fixture_client(tmp_path)
+    created = client.post("/deals", json={"property_key": "shortlist"}).json()
+    thread_id = created["thread_id"]
+
+    resumed = _advance_to_reply_interrupt(client, thread_id)
+    sender_email = resumed["interrupts"][0]["expected_sender_email"]
+
+    late_reply = {
+        "message_id": "reply-late-1",
+        "sender_email": sender_email,
+        "received_at": "2026-10-21T19:30:00Z",
+        "body": "I propose Saturday 20:00.",
+        "proposed_times": ["2026-10-24T20:00:00+02:00"],
+    }
+    resumed = client.post(
+        f"/deals/{thread_id}/resume", json={"response": late_reply}
+    ).json()
+
+    assert resumed["status"] == "waiting_human"
+    assert resumed["pending_approval_type"] == "schedule_exception"
+
+    resumed = client.post(
+        f"/deals/{thread_id}/resume",
+        json={"response": {"decision": "approved", "decided_by": "status-test"}},
+    ).json()
+
+    assert resumed["status"] == "completed"
+    assert resumed["state"]["outcome"] == "brief_ready"
+    assert resumed["state"]["current_stage"] == "complete"
+
+
+def test_schedule_exception_rejection_is_terminal_rejected(tmp_path) -> None:
+    client = fixture_client(tmp_path)
+    created = client.post("/deals", json={"property_key": "shortlist"}).json()
+    thread_id = created["thread_id"]
+
+    resumed = _advance_to_reply_interrupt(client, thread_id)
+    sender_email = resumed["interrupts"][0]["expected_sender_email"]
+
+    late_reply = {
+        "message_id": "reply-late-2",
+        "sender_email": sender_email,
+        "received_at": "2026-10-21T19:30:00Z",
+        "body": "I propose Saturday 20:00.",
+        "proposed_times": ["2026-10-24T20:00:00+02:00"],
+    }
+    resumed = client.post(
+        f"/deals/{thread_id}/resume", json={"response": late_reply}
+    ).json()
+    assert resumed["pending_approval_type"] == "schedule_exception"
+
+    resumed = client.post(
+        f"/deals/{thread_id}/resume",
+        json={"response": {"decision": "rejected"}},
+    ).json()
+
+    assert resumed["status"] == "rejected"
+    assert resumed["state"]["outcome"] == "schedule_rejected"
