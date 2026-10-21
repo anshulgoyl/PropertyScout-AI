@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Start and review PropertyScout AI acquisition searches." />
+    <title>PropertyScout AI</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="/app/" aria-label="PropertyScout AI home">
+        <span class="brand-mark" aria-hidden="true">PS</span>
+        <span>PropertyScout <strong>AI</strong></span>
+      </a>
+      <span class="environment">Local workspace</span>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="page-title">
+        <p class="eyebrow">Acquisition criteria</p>
+        <h1 id="page-title">What should we look for?</h1>
+        <p class="lede">
+          Give the scout a focused brief. You can refine the investment assumptions later.
+        </p>
+      </section>
+
+      <section class="workspace">
+        <form id="search-form" class="criteria-card">
+          <div class="section-heading">
+            <div>
+              <p class="step">01</p>
+              <h2>Core search</h2>
+            </div>
+            <span class="required-note">Required fields</span>
+          </div>
+
+          <div class="form-grid">
+            <label>
+              <span>City</span>
+              <input name="city" value="Cologne" autocomplete="address-level2" required />
+            </label>
+            <label>
+              <span>Post code <small>optional</small></span>
+              <input name="postal_code" placeholder="e.g. 50667" autocomplete="postal-code" />
+            </label>
+            <label>
+              <span>Minimum rooms</span>
+              <input name="minimum_rooms" type="number" value="2" min="1" step="0.5" />
+            </label>
+            <label>
+              <span>Minimum size</span>
+              <div class="input-suffix">
+                <input name="minimum_size_sqm" type="number" value="50" min="1" step="1" />
+                <span>m²</span>
+              </div>
+            </label>
+            <label>
+              <span>Maximum price</span>
+              <div class="input-prefix">
+                <span>€</span>
+                <input name="maximum_price" type="number" value="300000" min="1" step="1000" required />
+              </div>
+            </label>
+            <label>
+              <span>Property type</span>
+              <select name="property_type" required>
+                <option value="apartment">Apartment</option>
+                <option value="house">House</option>
+                <option value="multifamily">Multi-family</option>
+              </select>
+            </label>
+          </div>
+
+          <details class="advanced">
+            <summary>
+              <span><strong>More search criteria</strong><small>Yield, strategy, features</small></span>
+              <span class="summary-icon" aria-hidden="true">+</span>
+            </summary>
+            <div class="advanced-grid">
+              <label>
+                <span>Minimum gross yield</span>
+                <div class="input-suffix">
+                  <input name="minimum_gross_yield_percent" type="number" value="6" min="0" max="100" step="0.1" />
+                  <span>%</span>
+                </div>
+              </label>
+              <label>
+                <span>Investment strategy</span>
+                <select name="strategy">
+                  <option value="buy_to_let">Buy to let</option>
+                  <option value="value_add">Value add</option>
+                  <option value="renovate_and_sell">Renovate and sell</option>
+                </select>
+              </label>
+              <label>
+                <span>Must-have features <small>optional</small></span>
+                <input name="required_features" placeholder="e.g. balcony, lift" />
+              </label>
+              <label>
+                <span>Exclude features <small>optional</small></span>
+                <input name="excluded_features" placeholder="e.g. ground floor, renovation" />
+              </label>
+            </div>
+          </details>
+
+          <div class="form-actions">
+            <p><span class="pulse"></span> Live web discovery via Keenable</p>
+            <button type="submit" id="submit-button">
+              <span>Start property search</span><span aria-hidden="true">→</span>
+            </button>
+          </div>
+          <p id="form-error" class="error" role="alert" hidden></p>
+        </form>
+
+        <aside class="process-card" aria-label="How the search works">
+          <p class="step">Workflow</p>
+          <h2>Six agents, one deal state</h2>
+          <ol>
+            <li class="active"><span>1</span><div><strong>Scout</strong><small>Find matching listings</small></div></li>
+            <li><span>2</span><div><strong>Analyse</strong><small>Yield, risk and thesis</small></div></li>
+            <li><span>3</span><div><strong>Research</strong><small>Verify the right contact</small></div></li>
+            <li><span>4</span><div><strong>Outreach</strong><small>Draft with your approval</small></div></li>
+            <li><span>5</span><div><strong>Schedule</strong><small>Stay inside your hours</small></div></li>
+            <li><span>6</span><div><strong>Prepare</strong><small>Build the call brief</small></div></li>
+          </ol>
+        </aside>
+      </section>
+
+      <section id="results" class="results" aria-live="polite" hidden>
+        <div class="results-heading">
+          <div><p class="eyebrow">Scout report</p><h2>Candidate results</h2></div>
+          <span id="result-count"></span>
+        </div>
+        <div id="result-grid" class="result-grid"></div>
+      </section>
+    </main>
+
+    <script src="app.js" defer></script>
+  </body>
+</html>

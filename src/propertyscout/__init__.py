@@ -1,0 +1,2 @@
+"""PropertyScout AI domain package."""
+
