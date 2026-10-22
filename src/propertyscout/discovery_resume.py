@@ -37,7 +37,10 @@ from propertyscout.discovery import (
     DiscoveryRecord,
     DiscoveryStatus,
     FetchClient,
+    _budget_exhausted_record,
     _fetch_failed_record,
+    _parse_child_page,
+    _process_index_page,
     _property_record,
     _record_stub,
     csv_text,
@@ -57,6 +60,11 @@ PORTAL_BATCH_LIMITS: dict[str, int] = {
 DETAIL_FETCH_REASON = "detail-fetch-budget-exhausted"
 INDEX_FETCH_REASON = "index-fetch-budget-exhausted"
 DEFAULT_MINIMUM_AREA = 50.0
+# A complete purchase listing in the target area below this price, or below
+# this price per m², is flagged as suspicious for manual verification.
+SUSPICIOUS_PRICE_FLOOR = 50_000
+SUSPICIOUS_PRICE_PER_SQM = 1_000
+SUSPICIOUS_PRICE_REASON = "suspicious-price"
 
 # Clear living-area evidence in a listing URL slug, e.g. "ca-40qm-wfl".
 _SLUG_AREA = re.compile(r"(?P<value>\d+(?:[,.]\d+)?)\s*[-\s]?\s*qm", re.IGNORECASE)
@@ -73,7 +81,12 @@ class ResumeError(RuntimeError):
 
 
 class DuplicateFlag(StrictModel):
-    """A cross-portal duplicate relationship between two inventory rows."""
+    """A cross-portal duplicate relationship between two inventory rows.
+
+    ``validated`` holds the URL of the already validated counterpart for
+    syndicated duplicates, or of the batch's first twin for in-batch slug
+    duplicates retained for review.
+    """
 
     candidate: str
     validated: str
@@ -83,6 +96,7 @@ class ResumeSelection(StrictModel):
     """Deterministic selection report for one resume batch."""
 
     selected: list[str] = Field(default_factory=list)
+    index_candidates: list[str] = Field(default_factory=list)
     excluded_below_area: list[str] = Field(default_factory=list)
     excluded_likely_duplicates: list[str] = Field(default_factory=list)
     retained_uncertain_duplicates: list[str] = Field(default_factory=list)
@@ -99,12 +113,17 @@ class ResumeOutcome(StrictModel):
     records: list[DiscoveryRecord] = Field(default_factory=list)
     selection: ResumeSelection
     fetches: int = 0
+    index_fetches: int = 0
     complete: int = 0
     incomplete: int = 0
     rejected: int = 0
     quarantined: int = 0
     fetch_failed: int = 0
     deferred: int = 0
+    children_added: int = 0
+    children_fetched: int = 0
+    suspicious: int = 0
+
 
 
 def _decimal(value: str) -> float:
@@ -307,6 +326,86 @@ def select_resume_candidates(
     )
 
 
+def select_final_candidates(
+    records: list[DiscoveryRecord], *, process_index: bool = False
+) -> ResumeSelection:
+    """Select every pending candidate for the final resume batch.
+
+    Unlike :func:`select_resume_candidates` this mode applies no portal
+    quotas: every remaining individual-listing candidate is fetched so its
+    status is finally resolved — including candidates excluded from earlier
+    batches for uncertain duplication or below-minimum-area slug evidence.
+    Properties already processed are never re-fetched: candidates whose full
+    slug (including the portal object ID) already exists as a validated
+    listing on another portal are skipped, and for identical in-batch slug
+    twins only the first occurrence is fetched (the others are flagged and
+    retained). Index pages are queued separately for child-link extraction
+    when ``process_index`` is set.
+    """
+
+    by_id, _by_words = _validated_slugs(records)
+    selected: list[str] = []
+    index_candidates: list[str] = []
+    excluded_likely_duplicates: list[str] = []
+    retained_uncertain_duplicates: list[str] = []
+    duplicate_flags: list[DuplicateFlag] = []
+    seen_words: set[str] = set()
+
+    budget_exhausted_total = sum(
+        1 for record in records if record.status is DiscoveryStatus.BUDGET_EXHAUSTED
+    )
+    for record in records:
+        if record.status is not DiscoveryStatus.BUDGET_EXHAUSTED:
+            continue
+        url = canonical_url(record.url)
+        if DETAIL_FETCH_REASON in record.reasons:
+            slug = _path_slug(url).casefold()
+            words = _slug_words(url)
+            found = by_id.get(slug)
+            if slug and found is not None and found[0] != record.portal:
+                excluded_likely_duplicates.append(url)
+                duplicate_flags.append(DuplicateFlag(candidate=url, validated=found[1]))
+                continue
+            if words and words in seen_words:
+                retained_uncertain_duplicates.append(url)
+                continue
+            seen_words.add(words)
+            selected.append(url)
+        elif process_index and INDEX_FETCH_REASON in record.reasons:
+            index_candidates.append(url)
+
+    selected_set = {canonical_url(url) for url in selected}
+    index_set = {canonical_url(url) for url in index_candidates}
+    remaining_by_portal: dict[str, int] = {}
+    remaining_index_pages = 0
+    for record in records:
+        if record.status is not DiscoveryStatus.BUDGET_EXHAUSTED:
+            continue
+        key = canonical_url(record.url)
+        if key in selected_set or key in index_set:
+            continue
+        if INDEX_FETCH_REASON in record.reasons:
+            remaining_index_pages += 1
+        else:
+            remaining_by_portal[record.portal] = (
+                remaining_by_portal.get(record.portal, 0) + 1
+            )
+
+    return ResumeSelection(
+        selected=selected,
+        index_candidates=index_candidates,
+        excluded_likely_duplicates=excluded_likely_duplicates,
+        retained_uncertain_duplicates=retained_uncertain_duplicates,
+        duplicate_flags=duplicate_flags,
+        budget_exhausted_total=budget_exhausted_total,
+        remaining_budget_exhausted=(
+            budget_exhausted_total - len(selected) - len(index_candidates)
+        ),
+        remaining_by_portal=remaining_by_portal,
+        remaining_index_pages=remaining_index_pages,
+    )
+
+
 def _fetch_page(fetch_client: FetchClient, url: str) -> tuple[dict | None, str | None]:
     """One keyless fetch attempt; external errors become error messages."""
 
@@ -317,6 +416,30 @@ def _fetch_page(fetch_client: FetchClient, url: str) -> tuple[dict | None, str |
     if isinstance(page, dict):
         return page, None
     return None, (str(page)[:200] if page else "empty-response")
+
+
+def _flag_suspicious_price(record: DiscoveryRecord) -> DiscoveryRecord:
+    """Flag complete listings with economically implausible prices.
+
+    A purchase price below the floor, or below the per-m² floor, is almost
+    always a mis-parsed page value (e.g. a deposit or an ancillary cost read
+    as the only price). The status is unchanged; the ``suspicious-price``
+    reason marks the row for manual verification.
+    """
+
+    if record.status is not DiscoveryStatus.COMPLETE:
+        return record
+    price = record.price_eur
+    area = record.area_m2
+    if price is None:
+        return record
+    per_sqm = price / area if area is not None and area > 0 else None
+    suspicious = price < SUSPICIOUS_PRICE_FLOOR or (
+        per_sqm is not None and per_sqm < SUSPICIOUS_PRICE_PER_SQM
+    )
+    if not suspicious or SUSPICIOUS_PRICE_REASON in record.reasons:
+        return record
+    return record.model_copy(update={"reasons": [*record.reasons, SUSPICIOUS_PRICE_REASON]})
 
 
 def _resume_detail_record(
@@ -346,7 +469,27 @@ def _resume_detail_record(
         ]
         record = _property_record(merged, [], missing, url, criteria)
     record.source_references = extract_source_references(content)
-    return record
+    return _flag_suspicious_price(record)
+
+
+def _resume_child_record(
+    page: dict, url: str, criteria: InvestmentCriteria, parent_title: str
+) -> DiscoveryRecord:
+    """Validate a listing page discovered on a fetched index page.
+
+    Uses the existing child-page parsing, so pages without their own wording
+    (for example kleinanzeigen ads) are not rejected for missing markers: the
+    parent index page supplies purchase-intent and city context.
+    """
+
+    listing, reasons, missing = _parse_child_page(page, url, criteria, parent_title)
+    record = _property_record(listing, reasons, missing, canonical_url(url), criteria)
+    if listing is not None:
+        record.source_references = extract_source_references(
+            str(page.get("content") or "")
+        )
+    return _flag_suspicious_price(record)
+
 
 
 def resume_inventory(
@@ -355,6 +498,8 @@ def resume_inventory(
     criteria: InvestmentCriteria,
     fetch_client: FetchClient,
     detail_fetch_budget: int = DEFAULT_DETAIL_FETCH_BUDGET,
+    *,
+    process_index: bool = False,
 ) -> ResumeOutcome:
     """Fetch the selected URLs once each and update their inventory rows.
 
@@ -363,6 +508,13 @@ def resume_inventory(
     they are flagged via ``possible_duplicates`` and kept for review. The
     budget counts every fetch attempt — including failed ones — and nothing
     is retried.
+
+    With ``process_index`` set, the selection's index pages are fetched and
+    classified with the existing child-link extraction: children already in
+    the inventory are skipped, new children are appended as inventory rows
+    and fetched while budget remains, and the rest are appended as
+    budget-exhausted candidates. Complete listings with implausible prices
+    are flagged via the ``suspicious-price`` reason for manual verification.
     """
 
     updated = list(records)
@@ -378,6 +530,17 @@ def resume_inventory(
             )
     outcome = ResumeOutcome(selection=selection)
     budget = max(0, detail_fetch_budget)
+
+    def _count(record: DiscoveryRecord) -> None:
+        if record.status is DiscoveryStatus.COMPLETE:
+            outcome.complete += 1
+        elif record.status is DiscoveryStatus.INCOMPLETE:
+            outcome.incomplete += 1
+        elif record.status is DiscoveryStatus.REJECTED:
+            outcome.rejected += 1
+        elif record.status is DiscoveryStatus.QUARANTINED:
+            outcome.quarantined += 1
+
     for url in selection.selected:
         key = canonical_url(url)
         index = index_by_url.get(key)
@@ -395,14 +558,68 @@ def resume_inventory(
             continue
         record = _resume_detail_record(page, key, criteria)
         updated[index] = record
-        if record.status is DiscoveryStatus.COMPLETE:
-            outcome.complete += 1
-        elif record.status is DiscoveryStatus.INCOMPLETE:
-            outcome.incomplete += 1
-        elif record.status is DiscoveryStatus.REJECTED:
-            outcome.rejected += 1
-        elif record.status is DiscoveryStatus.QUARANTINED:
-            outcome.quarantined += 1
+        _count(record)
+
+    if process_index:
+        discovered: set[str] = set()
+        for url in selection.index_candidates:
+            key = canonical_url(url)
+            index = index_by_url.get(key)
+            if index is None:
+                raise ResumeError(f"index candidate is not in the inventory: {url}")
+            if budget <= 0:
+                outcome.deferred += 1
+                continue
+            budget -= 1
+            outcome.fetches += 1
+            outcome.index_fetches += 1
+            page, error = _fetch_page(fetch_client, key)
+            if error is not None:
+                updated[index] = _fetch_failed_record(key, error)
+                outcome.fetch_failed += 1
+                continue
+            children: list[tuple[str, str]] = []
+            child_seen: set[str] = set()
+            (page_record,) = _process_index_page(
+                page, key, criteria, children, child_seen
+            )
+            updated[index] = page_record
+            _count(page_record)
+            for link, parent_title in children:
+                child_key = canonical_url(link)
+                if child_key in index_by_url or child_key in discovered:
+                    continue  # already processed or discovered in this run
+                discovered.add(child_key)
+                if budget <= 0:
+                    updated.append(_budget_exhausted_record(child_key, "detail"))
+                    outcome.children_added += 1
+                    continue
+                budget -= 1
+                outcome.fetches += 1
+                outcome.children_fetched += 1
+                child_page, child_error = _fetch_page(fetch_client, child_key)
+                if child_error is not None:
+                    updated.append(_fetch_failed_record(child_key, child_error))
+                    outcome.fetch_failed += 1
+                    outcome.children_added += 1
+                    continue
+                child_record = _resume_child_record(
+                    child_page, child_key, criteria, parent_title
+                )
+                updated.append(child_record)
+                outcome.children_added += 1
+                _count(child_record)
+
+    # Flag implausible prices on every complete record, including previously
+    # validated ones, without changing their validated attributes.
+    for i, record in enumerate(updated):
+        flagged = _flag_suspicious_price(record)
+        if flagged is not record:
+            updated[i] = flagged
+    outcome.suspicious = sum(
+        1 for record in updated if SUSPICIOUS_PRICE_REASON in record.reasons
+    )
+
     # Assign the finished inventory only after all in-place updates, so the
     # validated snapshot reflects every replacement.
     outcome.records = list(updated)
@@ -470,6 +687,23 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Select and report candidates without any fetch and without writing output",
     )
+    parser.add_argument(
+        "--all-pending",
+        action="store_true",
+        help=(
+            "Ignore the per-portal limits and select every remaining "
+            "individual-listing candidate, including ones excluded from "
+            "earlier batches for uncertain duplication or small-area evidence"
+        ),
+    )
+    parser.add_argument(
+        "--process-index",
+        action="store_true",
+        help=(
+            "Also fetch pending index/search pages, extract their listing "
+            "links, and fetch or queue newly discovered children"
+        ),
+    )
     return parser
 
 
@@ -485,12 +719,23 @@ def _remaining_summary(selection: ResumeSelection) -> str:
 
 
 def _summary(outcome: ResumeOutcome) -> str:
-    return (
-        f"{outcome.fetches} fetch attempt(s): "
-        f"complete={outcome.complete}, incomplete={outcome.incomplete}, "
-        f"rejected={outcome.rejected}, quarantined={outcome.quarantined}, "
-        f"fetch_failed={outcome.fetch_failed}, deferred={outcome.deferred}"
-    )
+    parts = [
+        (
+            f"{outcome.fetches} fetch attempt(s): "
+            f"complete={outcome.complete}, incomplete={outcome.incomplete}, "
+            f"rejected={outcome.rejected}, quarantined={outcome.quarantined}, "
+            f"fetch_failed={outcome.fetch_failed}, deferred={outcome.deferred}"
+        )
+    ]
+    if outcome.index_fetches:
+        parts.append(
+            f"{outcome.index_fetches} index fetch(es); "
+            f"{outcome.children_added} child record(s) added "
+            f"({outcome.children_fetched} fetched)"
+        )
+    if outcome.suspicious:
+        parts.append(f"{outcome.suspicious} suspicious-price flag(s)")
+    return "; ".join(parts)
 
 
 def run_resume_cli(argv: list[str] | None, fetch_client: FetchClient | None = None) -> int:
@@ -507,11 +752,23 @@ def run_resume_cli(argv: list[str] | None, fetch_client: FetchClient | None = No
         "kleinanzeigen": args.kleinanzeigen_limit,
         "immoportal.com": args.immoportal_limit,
     }
-    selection = select_resume_candidates(records, limits)
+    if args.all_pending:
+        selection = select_final_candidates(
+            records, process_index=args.process_index
+        )
+    else:
+        selection = select_resume_candidates(records, limits)
     criteria = build_criteria(args)
     print(f"selected {len(selection.selected)} candidate(s):")
     for url in selection.selected:
         print(f"  {url}")
+    if selection.index_candidates:
+        print(
+            f"queued {len(selection.index_candidates)} index page(s) for "
+            "child-link extraction:"
+        )
+        for url in selection.index_candidates:
+            print(f"  {url}")
     if selection.excluded_below_area:
         print(
             f"excluded {len(selection.excluded_below_area)} below-"
@@ -537,7 +794,12 @@ def run_resume_cli(argv: list[str] | None, fetch_client: FetchClient | None = No
     if fetch_client is None:
         fetch_client = KeenableFetch(api_key=SecretStr(""), timeout=30)
     outcome = resume_inventory(
-        records, selection, criteria, fetch_client, args.detail_fetch_budget
+        records,
+        selection,
+        criteria,
+        fetch_client,
+        args.detail_fetch_budget,
+        process_index=args.process_index,
     )
     Path(args.output).write_text(csv_text(outcome.records), encoding="utf-8")
     print(

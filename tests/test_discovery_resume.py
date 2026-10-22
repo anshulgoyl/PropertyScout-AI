@@ -10,10 +10,12 @@ import pytest
 from propertyscout.discovery import CSV_COLUMNS, DiscoveryStatus
 from propertyscout.discovery_resume import (
     PORTAL_BATCH_LIMITS,
+    SUSPICIOUS_PRICE_REASON,
     DuplicateFlag,
     read_inventory,
     resume_inventory,
     run_resume_cli,
+    select_final_candidates,
     select_resume_candidates,
 )
 from propertyscout.schemas import InvestmentCriteria, Money
@@ -500,6 +502,168 @@ def test_resume_cli_reports_missing_inventory(tmp_path: Path, capsys) -> None:
     assert "inventory not found" in capsys.readouterr().err
 
 
+def test_select_final_candidates_processes_all_pending(tmp_path: Path) -> None:
+    path = tmp_path / "inventory.csv"
+    write_inventory(path, synthetic_inventory())
+    records = read_inventory(path)
+    selection = select_final_candidates(records, process_index=True)
+
+    assert selection.selected == [
+        IM_H5NPW4,
+        IM_GXP2N8,
+        *IMMOBILO_SELECTED,
+        *KA_SELECTED,
+        *IMMO_SELECTED,
+        IMMO_EXTRA,
+    ]
+    assert selection.index_candidates == [KA_INDEX]
+    assert selection.excluded_likely_duplicates == [IM_GXVYGF]
+    assert selection.retained_uncertain_duplicates == [
+        IM_GXP2M3,
+        KA_AREA,
+        KA_IN_BATCH_TWIN,
+    ]
+    assert selection.budget_exhausted_total == 28
+    assert selection.remaining_budget_exhausted == 4
+    assert selection.remaining_by_portal == {
+        "immobilo": 2,
+        "kleinanzeigen": 2,
+    }
+    assert selection.remaining_index_pages == 0
+    assert selection.duplicate_flags == [
+        DuplicateFlag(candidate=IM_GXVYGF, validated=YR_GXVYGF)
+    ]
+
+
+KA_INDEX_URL = KA_INDEX
+KA_CHILD_ONE = (
+    "https://www.kleinanzeigen.de/s-anzeige/neue-2-zimmer-wohnung-in-bilk/"
+    "3499999101-196-2085"
+)
+KA_CHILD_TWO = (
+    "https://www.kleinanzeigen.de/s-anzeige/neue-3-zimmer-wohnung-in-bilk/"
+    "3499999102-196-2085"
+)
+INDEX_PAGE = md_page(
+    KA_INDEX,
+    "2 Zimmer Wohnung, Eigentumswohnung kaufen in Düsseldorf-Bilk | kleinanzeigen.de",
+    "# Wohnung kaufen in Düsseldorf-Bilk | kleinanzeigen.de\n\n"
+    f"[Known listing]({IMMOBILO_SELECTED[0]})\n\n"
+    f"[Neue Wohnung eins]({KA_CHILD_ONE})\n\n"
+    f"[Neue Wohnung zwei]({KA_CHILD_TWO})\n\n"
+    "Wohnungen ab 149.000 € in Düsseldorf bis 329.000 €\n",
+)
+SUSPICIOUS_CHILD_PAGE = md_page(
+    KA_CHILD_ONE,
+    "Neue 2-Zimmer-Wohnung in Düsseldorf-Bilk",
+    "Kaufpreis 35.000,00 €\n76 m²\n2 Zimmer\n40211 Düsseldorf\nBalkon\n",
+)
+SMALL_VALIDATED_ROW = row(
+    "https://www.yourimmo.de/immobilien/klein-aber-mein-appartement-mit-balkon-H6J2RS",
+    "yourimmo",
+    "complete",
+    title="Klein, aber MEIN! Appartement mit Balkon",
+    price_eur="34000",
+    area_m2="26",
+    rooms="1",
+)
+
+
+def final_inventory() -> list[dict[str, str]]:
+    return [
+        SMALL_VALIDATED_ROW,
+        row(IMMOBILO_SELECTED[0], "immobilo", "budget_exhausted", (DETAIL_REASON,)),
+        row(KA_INDEX, "kleinanzeigen", "budget_exhausted", (INDEX_REASON,)),
+    ]
+
+
+def final_pages() -> dict[str, object]:
+    return {
+        IMMOBILO_SELECTED[0]: COMPLETE_PAGE,
+        KA_INDEX: INDEX_PAGE,
+        KA_CHILD_ONE: SUSPICIOUS_CHILD_PAGE,
+        KA_CHILD_TWO: RuntimeError("blocked"),
+    }
+
+
+def test_resume_processes_index_pages_and_children(tmp_path: Path) -> None:
+    path = tmp_path / "inventory.csv"
+    write_inventory(path, final_inventory())
+    records = read_inventory(path)
+    selection = select_final_candidates(records, process_index=True)
+    assert selection.selected == [IMMOBILO_SELECTED[0]]
+    assert selection.index_candidates == [KA_INDEX]
+
+    fetch = FakeFetchClient(final_pages())
+    outcome = resume_inventory(
+        records, selection, duesseldorf_criteria(), fetch, detail_fetch_budget=40,
+        process_index=True,
+    )
+
+    assert outcome.fetches == 4  # detail + index + 2 children
+    assert outcome.index_fetches == 1
+    assert outcome.children_added == 2
+    assert outcome.children_fetched == 2
+    assert outcome.complete == 2  # immobilo detail + new child one
+    assert outcome.incomplete == 0
+    assert outcome.rejected == 0
+    assert outcome.quarantined == 0
+    assert outcome.fetch_failed == 1  # blocked child two
+    assert outcome.suspicious == 2  # 35k child + pre-validated 34k row
+
+    assert len(outcome.records) == 5  # 3 original + 2 new children
+    by_url = {record.url: record for record in outcome.records}
+    index_record = by_url[KA_INDEX]
+    assert index_record.status is DiscoveryStatus.INDEX_PAGE
+    assert index_record.child_count == 3
+    assert "index-page" in index_record.reasons
+    known_child = by_url[KA_CHILD_ONE]
+    assert known_child.status is DiscoveryStatus.COMPLETE
+    assert known_child.price_eur == 35000
+    assert known_child.area_m2 == 76
+    assert known_child.rooms == 2
+    assert known_child.portal == "kleinanzeigen"
+    assert known_child.matches_criteria is True
+    assert SUSPICIOUS_PRICE_REASON in known_child.reasons  # flagged, kept complete
+    assert by_url[KA_CHILD_TWO].status is DiscoveryStatus.FETCH_FAILED
+    assert by_url[
+        "https://www.yourimmo.de/immobilien/klein-aber-mein-appartement-mit-balkon-H6J2RS"
+    ].reasons == [SUSPICIOUS_PRICE_REASON]  # previously validated row, flagged only
+    assert by_url[IMMOBILO_SELECTED[0]].status is DiscoveryStatus.COMPLETE
+    assert SUSPICIOUS_PRICE_REASON not in by_url[IMMOBILO_SELECTED[0]].reasons
+
+
+def test_resume_cli_final_batch_preserves_source(tmp_path: Path, capsys) -> None:
+    source = tmp_path / "inventory.csv"
+    write_inventory(source, final_inventory())
+    before = source.read_bytes()
+    output = tmp_path / "inventory_final.csv"
+    fetch = FakeFetchClient(final_pages())
+    exit_code = run_resume_cli(
+        [
+            "--inventory", str(source),
+            "--output", str(output),
+            "--city", "Düsseldorf", "--location", "Meerbusch",
+            "--budget", "551001", "--rooms", "2", "--min-area", "50",
+            "--detail-fetch-budget", "40",
+            "--all-pending", "--process-index",
+        ],
+        fetch_client=fetch,
+    )
+    assert exit_code == 0
+    assert source.read_bytes() == before
+    assert len(fetch.calls) == 4  # 1 detail + 1 index + 2 children
+    updated = list(csv.DictReader(output.read_text(encoding="utf-8").splitlines()))
+    assert len(updated) == 5
+    by_url = {r["url"]: r for r in updated}
+    assert by_url[KA_INDEX]["status"] == "index_page"
+    assert "index-page" in by_url[KA_INDEX]["reasons"]
+    assert by_url[KA_CHILD_ONE]["status"] == "complete"
+    assert "suspicious-price" in by_url[KA_CHILD_ONE]["reasons"]
+    assert by_url[KA_CHILD_TWO]["status"] == "fetch_failed"
+    assert "index fetch(es)" in capsys.readouterr().err
+
+
 def test_build_parser_defaults_match_portal_batch_limits() -> None:
     from propertyscout.discovery_resume import build_criteria, build_parser
 
@@ -515,9 +679,13 @@ def test_build_parser_defaults_match_portal_batch_limits() -> None:
     assert args.immobilo_limit == PORTAL_BATCH_LIMITS["immobilo"] == 12
     assert args.kleinanzeigen_limit == PORTAL_BATCH_LIMITS["kleinanzeigen"] == 5
     assert args.immoportal_limit == PORTAL_BATCH_LIMITS["immoportal.com"] == 3
+    assert not args.all_pending
+    assert not args.process_index
     criteria = build_criteria(args)
     assert criteria.locations == ["Düsseldorf"]
     assert criteria.maximum_purchase_price.amount == 551001
+
+
 
 
 
