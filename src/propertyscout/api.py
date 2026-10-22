@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
-from propertyscout.analyst import create_nebius_reasoner
+from propertyscout.analyst import build_market_basis, create_nebius_reasoner
 from propertyscout.bootstrap import initial_state, initial_state_for_listing
 from propertyscout.config import llm_enabled_from_env
 from propertyscout.market_search import (
@@ -82,6 +82,10 @@ class DealView(BaseModel):
 class SearchView(BaseModel):
     search_id: str
     deals: list[DealView]
+
+
+MIN_COMP_COUNT = 8
+MAX_COMP_QUERIES = 3
 
 
 def _config(thread_id: str) -> dict:
@@ -242,11 +246,24 @@ def create_app(
             listings = selected_listing_search.search(criteria)
         except (ListingSearchError, TimeoutError) as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+        # One comparable basis serves every deal of this search. A failed comps
+        # query is not fatal: deals then start without a basis and the analyst
+        # routes them to research instead of inventing market numbers.
+        try:
+            comps = selected_listing_search.search_comps(
+                criteria, MIN_COMP_COUNT, MAX_COMP_QUERIES
+            )
+        except (ListingSearchError, TimeoutError):
+            comps = []
+        subject_urls = {str(listing.listing_url) for listing in listings}
+        market_basis = build_market_basis(comps, criteria, exclude_urls=subject_urls)
+
         with open_sqlite_graph(database_path, **graph_options) as graph:
             for index, property_listing in enumerate(listings, start=1):
                 thread_id = f"{search_id}-{index}"
                 graph.invoke(
-                    initial_state_for_listing(property_listing, criteria),
+                    initial_state_for_listing(property_listing, criteria, market_basis),
                     _config(thread_id),
                 )
                 deal_views.append(_deal_view(graph, thread_id))

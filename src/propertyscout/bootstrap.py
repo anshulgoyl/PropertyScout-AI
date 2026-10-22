@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from propertyscout.fixtures import sample_properties
+from propertyscout.analyst import build_market_basis
+from propertyscout.fixtures import sample_comparables, sample_properties
 from propertyscout.schemas import (
     InvestmentCriteria,
+    MarketBasis,
     Money,
     PropertyListing,
     SchedulingPreferences,
@@ -24,6 +26,10 @@ def default_criteria() -> InvestmentCriteria:
         minimum_living_area_sqm=50,
         strategy="buy_to_let",
     )
+
+
+def fixture_market_basis() -> MarketBasis | None:
+    return build_market_basis(sample_comparables(), default_criteria())
 
 
 def initial_state(
@@ -46,13 +52,26 @@ def initial_state(
             "Confirm the current tenancy and lease terms.",
             "Ask whether major building works are planned.",
         ],
+        "market_basis": fixture_market_basis(),
     }
 
 
 def initial_state_for_listing(
     property_listing: PropertyListing,
     criteria: InvestmentCriteria,
+    market_basis: MarketBasis | None = None,
 ) -> DealState:
+    """Start a thread for one discovered listing with its search's market basis.
+
+    When no comparable basis could be built for the search, the state carries no
+    ``market_basis`` key and the Investment Analyst routes the deal to research
+    instead of valuing it against invented numbers.
+    """
+
     state = initial_state("shortlist", criteria=criteria)
+    if market_basis is None:
+        state.pop("market_basis", None)
+    else:
+        state["market_basis"] = market_basis
     state["property"] = property_listing
     return state

@@ -135,7 +135,12 @@ def create_investment_analyst(reasoner: InvestmentReasoner | None = None):
     selected_reasoner = reasoner or RuleBasedReasoner()
 
     def investment_analyst(state: DealState) -> dict:
-        analysis = analyse_property(state["property"], state["criteria"], selected_reasoner)
+        analysis = analyse_property(
+            state["property"],
+            state["criteria"],
+            selected_reasoner,
+            state.get("market_basis"),
+        )
         return {
             "analysis": analysis,
             "current_stage": WorkflowStage.ANALYSIS,

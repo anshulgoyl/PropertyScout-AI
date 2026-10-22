@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from propertyscout.analyst import RuleBasedReasoner, analyse_property
-from propertyscout.bootstrap import default_criteria
+from propertyscout.bootstrap import default_criteria, fixture_market_basis
 from propertyscout.fixtures import sample_properties
 from propertyscout.meeting_intelligence import TemplateMeetingBriefService
 from propertyscout.schemas import InboundReply, MeetingDetails
@@ -9,7 +9,12 @@ from propertyscout.schemas import InboundReply, MeetingDetails
 
 def test_template_brief_uses_verified_analysis_and_user_priorities() -> None:
     property_listing = sample_properties()["shortlist"]
-    analysis = analyse_property(property_listing, default_criteria(), RuleBasedReasoner())
+    analysis = analyse_property(
+        property_listing,
+        default_criteria(),
+        RuleBasedReasoner(),
+        fixture_market_basis(),
+    )
     meeting = MeetingDetails(
         starts_at=datetime.fromisoformat("2026-10-28T14:00:00+01:00"),
         ends_at=datetime.fromisoformat("2026-10-28T14:30:00+01:00"),
@@ -42,7 +47,12 @@ def test_template_brief_uses_verified_analysis_and_user_priorities() -> None:
 
 def test_template_brief_deduplicates_user_priorities() -> None:
     property_listing = sample_properties()["shortlist"]
-    analysis = analyse_property(property_listing, default_criteria(), RuleBasedReasoner())
+    analysis = analyse_property(
+        property_listing,
+        default_criteria(),
+        RuleBasedReasoner(),
+        fixture_market_basis(),
+    )
     meeting = MeetingDetails(
         starts_at=datetime.fromisoformat("2026-10-28T14:00:00+01:00"),
         ends_at=datetime.fromisoformat("2026-10-28T14:30:00+01:00"),

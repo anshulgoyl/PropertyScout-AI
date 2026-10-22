@@ -2,9 +2,9 @@ from datetime import datetime
 
 from langgraph.types import Command
 
-from propertyscout.bootstrap import initial_state
+from propertyscout.bootstrap import default_criteria, initial_state
 from propertyscout.graph import build_graph
-from propertyscout.schemas import WorkflowOutcome, WorkflowStage
+from propertyscout.schemas import Money, WorkflowOutcome, WorkflowStage
 
 
 def invoke_fixture(property_key: str):
@@ -21,11 +21,57 @@ def test_property_above_budget_is_rejected_by_scout() -> None:
     assert "analysis" not in result
 
 
-def test_missing_rent_routes_to_research() -> None:
+def test_value_based_analysis_pauses_even_without_rent() -> None:
     _, _, result = invoke_fixture("research")
 
+    assert "__interrupt__" in result
+    assert result["current_stage"] == WorkflowStage.ANALYSIS
+    assert result["analysis"].valuation is not None
+    assert result["analysis"].valuation.comp_count == 9
+    assert result["analysis"].missing_critical_data == []
+
+
+def test_missing_area_routes_to_research() -> None:
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "test-missing-area"}}
+    criteria = default_criteria().model_copy(update={"minimum_living_area_sqm": None})
+    state = initial_state("research", criteria=criteria)
+    state["property"] = state["property"].model_copy(update={"living_area_sqm": None})
+
+    result = graph.invoke(state, config)
+
     assert result["outcome"] == WorkflowOutcome.NEEDS_RESEARCH
-    assert result["analysis"].missing_critical_data == ["annual_rent"]
+    assert result["analysis"].missing_critical_data == ["living_area_sqm"]
+    assert result["current_stage"] == WorkflowStage.COMPLETE
+
+
+def test_missing_market_basis_routes_to_research() -> None:
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "test-no-basis"}}
+    state = initial_state("shortlist")
+    state.pop("market_basis")
+
+    result = graph.invoke(state, config)
+
+    assert result["outcome"] == WorkflowOutcome.NEEDS_RESEARCH
+    assert result["analysis"].missing_critical_data == ["market_basis"]
+    assert result["current_stage"] == WorkflowStage.COMPLETE
+
+
+def test_overpriced_property_is_rejected_by_value_gap() -> None:
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "test-overpriced"}}
+    criteria = default_criteria().model_copy(
+        update={"maximum_purchase_price": Money(amount=500_000, currency="EUR")}
+    )
+    state = initial_state("shortlist", criteria=criteria)
+    state["property"] = state["property"].model_copy(
+        update={"asking_price": Money(amount=460_000, currency="EUR")}
+    )
+
+    result = graph.invoke(state, config)
+
+    assert result["outcome"] == WorkflowOutcome.ANALYSIS_REJECTED
     assert result["current_stage"] == WorkflowStage.COMPLETE
 
 

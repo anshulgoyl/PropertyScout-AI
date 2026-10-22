@@ -115,7 +115,7 @@ def test_required_feature_is_applied_by_market_scout(tmp_path) -> None:
     deals = response.json()["deals"]
     assert deals[0]["state"]["outcome"] == "scout_rejected"
     assert "Missing required features" in deals[0]["state"]["scout_assessment"]["reasons"][0]
-    assert deals[2]["state"]["outcome"] == "needs_research"
+    assert deals[2]["interrupts"][0]["approval_type"] == "shortlist"
 
 
 def test_postcode_filter_rejects_fixture_outside_target_area(tmp_path) -> None:
@@ -156,13 +156,16 @@ def test_terminal_reject_deal_reports_rejected_status(tmp_path) -> None:
     assert created["state"]["outcome"] == "scout_rejected"
 
 
-def test_terminal_research_deal_reports_needs_research_status(tmp_path) -> None:
+def test_research_fixture_reaches_shortlist_approval_with_valuation(tmp_path) -> None:
     client = fixture_client(tmp_path)
 
     created = client.post("/deals", json={"property_key": "research"}).json()
 
-    assert created["status"] == "needs_research"
-    assert created["state"]["outcome"] == "needs_research"
+    assert created["status"] == "waiting_human"
+    assert created["pending_approval_type"] == "shortlist"
+    valuation = created["state"]["analysis"]["valuation"]
+    assert valuation["comp_count"] == 9
+    assert valuation["estimated_market_value"]["amount"] == 286_404.0
 
 
 def test_status_advances_to_next_interrupt_after_approval(tmp_path) -> None:

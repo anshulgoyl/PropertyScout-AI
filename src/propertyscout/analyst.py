@@ -20,6 +20,7 @@ from propertyscout.schemas import (
     InvestmentCriteria,
     InvestmentJudgment,
     MarketBasis,
+    MarketValuation,
     Money,
     PropertyCondition,
     PropertyListing,
@@ -29,6 +30,50 @@ PURCHASE_COST_RATE = 0.10
 
 MIN_PLAUSIBLE_EUR_PER_SQM = 500.0
 MAX_PLAUSIBLE_EUR_PER_SQM = 30_000.0
+
+# Value-gap routing thresholds (asking price versus estimated market value).
+SHORTLIST_MAX_GAP = 0.05
+REJECT_GAP_THRESHOLD = 0.25
+
+# A condition bucket needs this many comps before its median is trusted.
+MIN_CONDITION_COMPS = 3
+
+# Applied to the overall median only when no condition-specific comp bucket
+# reaches ``MIN_CONDITION_COMPS``. Values are documented analysis assumptions.
+CONDITION_ADJUSTMENTS: dict[PropertyCondition, float] = {
+    PropertyCondition.RENOVATION_REQUIRED: 0.85,
+    PropertyCondition.PARTIALLY_RENOVATED: 0.92,
+    PropertyCondition.RENOVATED: 1.00,
+    PropertyCondition.WELL_MAINTAINED: 1.03,
+    PropertyCondition.NEW_CONSTRUCTION: 1.10,
+}
+
+SCORE_WEIGHTS = {
+    "value_gap": 45.0,
+    "comp_confidence": 20.0,
+    "condition_energy": 20.0,
+    "data_completeness": 15.0,
+}
+
+_ENERGY_POINTS = {
+    "A++": 18.0,
+    "A+": 18.0,
+    "A": 18.0,
+    "B": 15.0,
+    "C": 12.0,
+    "D": 9.0,
+    "E": 6.0,
+    "F": 3.0,
+    "G": 0.0,
+}
+
+_CONDITION_BONUS: dict[PropertyCondition, float] = {
+    PropertyCondition.NEW_CONSTRUCTION: 2.0,
+    PropertyCondition.RENOVATED: 2.0,
+    PropertyCondition.WELL_MAINTAINED: 1.0,
+    PropertyCondition.PARTIALLY_RENOVATED: 0.0,
+    PropertyCondition.RENOVATION_REQUIRED: -4.0,
+}
 
 
 def build_market_basis(
@@ -97,6 +142,7 @@ class InvestmentReasoner(Protocol):
         property_listing: PropertyListing,
         criteria: InvestmentCriteria,
         metrics: FinancialMetrics,
+        valuation: MarketValuation | None = None,
     ) -> InvestmentJudgment: ...
 
 
@@ -108,27 +154,42 @@ class RuleBasedReasoner:
         property_listing: PropertyListing,
         criteria: InvestmentCriteria,
         metrics: FinancialMetrics,
+        valuation: MarketValuation | None = None,
     ) -> InvestmentJudgment:
-        gross_yield = metrics.gross_yield
-        minimum_yield = criteria.minimum_gross_yield
-        meets_yield = gross_yield is not None and (
-            minimum_yield is None or gross_yield >= minimum_yield
-        )
+        if valuation is None:
+            return InvestmentJudgment(
+                recommendation=AnalysisRecommendation.RESEARCH,
+                thesis="A comparable-based market value estimate is required before judging.",
+                risks=["No comparable market basis is attached to this deal."],
+            )
+
+        gap = valuation.value_gap
+        strengths: list[str] = []
+        if gap <= 0:
+            strengths.append(
+                f"The asking price is {gap:.1%} versus the comparable-based estimate."
+            )
+        risks = [
+            "Operating costs and financing are not part of this analysis.",
+            "Renting potential is evaluated in a later stage.",
+        ]
+        if gap > 0:
+            risks.append(
+                f"The asking price is {gap:+.1%} above the comparable-based estimate."
+            )
         return InvestmentJudgment(
             recommendation=(
-                AnalysisRecommendation.SHORTLIST
-                if meets_yield
-                else AnalysisRecommendation.REJECT
+                AnalysisRecommendation.REVIEW
+                if gap > SHORTLIST_MAX_GAP
+                else AnalysisRecommendation.SHORTLIST
             ),
             thesis=(
-                "The property meets the configured gross-yield threshold."
-                if meets_yield
-                else "The property is below the configured gross-yield threshold."
+                f"The comparable-based reference is {valuation.comp_eur_per_sqm:,.0f} "
+                f"EUR/m² from {valuation.comp_count} comparable listings; the asking "
+                f"price sits {gap:+.1%} relative to the estimated market value."
             ),
-            strengths=[f"Calculated gross yield is {gross_yield:.2%}."]
-            if meets_yield and gross_yield is not None
-            else [],
-            risks=["Operating costs and financing are not included in this MVP analysis."],
+            strengths=strengths,
+            risks=risks,
         )
 
 
@@ -146,20 +207,25 @@ class LLMInvestmentReasoner:
         property_listing: PropertyListing,
         criteria: InvestmentCriteria,
         metrics: FinancialMetrics,
+        valuation: MarketValuation | None = None,
     ) -> InvestmentJudgment:
         facts = {
             "property": property_listing.model_dump(mode="json"),
             "investment_criteria": criteria.model_dump(mode="json"),
             "calculated_metrics": metrics.model_dump(mode="json"),
+            "market_valuation": (
+                valuation.model_dump(mode="json") if valuation else None
+            ),
         }
         result = self._structured_model.invoke(
             [
                 SystemMessage(
                     content=(
                         "You are a cautious real-estate investment analyst. Evaluate only the "
-                        "provided facts and calculated metrics. Never recalculate or alter numeric "
-                        "metrics. Identify material strengths and risks. Recommend reject, review, "
-                        "research, or shortlist. Do not claim legal, tax, or financial certainty."
+                        "provided facts, calculated metrics, and comparable-based valuation. Never "
+                        "recalculate or alter numeric metrics. Judge the price relative to the "
+                        "estimated market value. Recommend reject, review, research, or shortlist. "
+                        "Do not claim legal, tax, or financial certainty."
                     )
                 ),
                 HumanMessage(content=json.dumps(facts, indent=2)),
@@ -185,12 +251,64 @@ def create_nebius_reasoner(settings: ModelSettings | None = None) -> LLMInvestme
     return LLMInvestmentReasoner(model)
 
 
+def _score_components(
+    valuation: MarketValuation,
+    property_listing: PropertyListing,
+) -> dict[str, float]:
+    """Deterministic score components; every number stays in Python."""
+
+    value_gap_points = SCORE_WEIGHTS["value_gap"] * (
+        1 - (valuation.value_gap + 0.25) / 0.5
+    )
+    value_gap_points = max(0.0, min(SCORE_WEIGHTS["value_gap"], value_gap_points))
+
+    if valuation.comp_count >= 12:
+        comp_points = 20.0
+    elif valuation.comp_count >= 8:
+        comp_points = 15.0
+    elif valuation.comp_count >= 4:
+        comp_points = 8.0
+    else:
+        comp_points = 3.0
+
+    energy_points = _ENERGY_POINTS.get(property_listing.energy_class, 8.0)
+    condition_bonus = _CONDITION_BONUS.get(property_listing.condition, 0.0)
+    condition_energy = max(
+        0.0, min(SCORE_WEIGHTS["condition_energy"], energy_points + condition_bonus)
+    )
+
+    missing_signals = sum(
+        1
+        for signal in (
+            property_listing.build_year,
+            property_listing.energy_class,
+            property_listing.condition,
+        )
+        if signal is None
+    )
+    completeness = max(6.0, SCORE_WEIGHTS["data_completeness"] - 3.0 * missing_signals)
+
+    return {
+        "value_gap": round(value_gap_points, 2),
+        "comp_confidence": round(comp_points, 2),
+        "condition_energy": round(condition_energy, 2),
+        "data_completeness": round(completeness, 2),
+    }
+
+
 def analyse_property(
     property_listing: PropertyListing,
     criteria: InvestmentCriteria,
     reasoner: InvestmentReasoner,
+    market_basis: MarketBasis | None = None,
 ) -> InvestmentAnalysis:
-    """Combine trusted calculations with a bounded qualitative judgment."""
+    """Estimate market value from comparables and route on the value gap.
+
+    Python owns every number. Renting potential is intentionally deferred to a
+    later stage: gross yield is computed only when verified rent exists, and it
+    never drives routing. Missing living area or a missing market basis routes
+    to research instead of producing an invented valuation.
+    """
 
     price = property_listing.asking_price
     total_cost = Money(
@@ -198,59 +316,124 @@ def analyse_property(
         currency=price.currency,
     )
 
-    if property_listing.annual_rent is None:
+    missing: list[str] = []
+    if not property_listing.living_area_sqm:
+        missing.append("living_area_sqm")
+    if market_basis is None:
+        missing.append("market_basis")
+    if missing:
         return InvestmentAnalysis(
             metrics=FinancialMetrics(purchase_price=price, estimated_total_cost=total_cost),
             recommendation=AnalysisRecommendation.RESEARCH,
-            thesis="Rental income is required before the yield can be assessed.",
-            assumptions=["Acquisition costs are estimated at 10% of purchase price."],
-            risks=["The investment return cannot be evaluated without rental income."],
-            missing_critical_data=["annual_rent"],
-            evidence=property_listing.evidence,
-        )
-
-    if property_listing.annual_rent.currency != price.currency:
-        return InvestmentAnalysis(
-            metrics=FinancialMetrics(
-                purchase_price=price,
-                estimated_total_cost=total_cost,
-                annual_rent=property_listing.annual_rent,
+            thesis=(
+                "A comparable-based market value estimate requires the living area "
+                "and a local comparable-listing basis."
             ),
-            recommendation=AnalysisRecommendation.RESEARCH,
-            thesis="Rental income and purchase price require a common currency.",
-            risks=["No exchange-rate evidence is available."],
-            missing_critical_data=["exchange_rate"],
+            assumptions=["Acquisition costs are estimated at 10% of purchase price."],
+            risks=[
+                "The market value cannot be estimated from the available evidence."
+            ],
+            missing_critical_data=missing,
             evidence=property_listing.evidence,
         )
 
-    gross_yield = property_listing.annual_rent.amount / price.amount
-    metrics = FinancialMetrics(
-        purchase_price=price,
-        estimated_total_cost=total_cost,
-        annual_rent=property_listing.annual_rent,
-        gross_yield=gross_yield,
+    bucket = next(
+        (
+            entry
+            for entry in market_basis.by_condition
+            if entry.condition == property_listing.condition
+            and entry.comp_count >= MIN_CONDITION_COMPS
+        ),
+        None,
     )
-    judgment = reasoner.judge(property_listing, criteria, metrics)
+    adjustments: dict[str, float] = {}
+    if bucket is not None:
+        comp_eur_per_sqm = bucket.eur_per_sqm
+        comp_count = bucket.comp_count
+    else:
+        adjustment_factor = CONDITION_ADJUSTMENTS.get(property_listing.condition, 1.0)
+        comp_eur_per_sqm = market_basis.overall_eur_per_sqm * adjustment_factor
+        comp_count = market_basis.overall_comp_count
+        if adjustment_factor != 1.0:
+            adjustments["condition_fallback"] = adjustment_factor
 
-    minimum_yield = criteria.minimum_gross_yield
-    if minimum_yield is not None and gross_yield < minimum_yield:
+    estimated_value = property_listing.living_area_sqm * comp_eur_per_sqm
+    value_gap = (price.amount - estimated_value) / estimated_value
+    valuation = MarketValuation(
+        estimated_market_value=Money(
+            amount=round(estimated_value, 2), currency=price.currency
+        ),
+        price_per_sqm=Money(
+            amount=round(price.amount / property_listing.living_area_sqm, 2),
+            currency=price.currency,
+        ),
+        comp_eur_per_sqm=round(comp_eur_per_sqm, 2),
+        value_gap=round(value_gap, 4),
+        comp_count=comp_count,
+        condition=property_listing.condition,
+        basis=(
+            f"{market_basis.city}"
+            f"{' ' + market_basis.postal_code if market_basis.postal_code else ''}"
+            f" · {comp_count} comparable listings"
+        ),
+        adjustments=adjustments,
+    )
+
+    metrics = FinancialMetrics(purchase_price=price, estimated_total_cost=total_cost)
+    if (
+        property_listing.annual_rent is not None
+        and property_listing.annual_rent.currency == price.currency
+    ):
+        metrics.annual_rent = property_listing.annual_rent
+        metrics.gross_yield = property_listing.annual_rent.amount / price.amount
+
+    judgment = reasoner.judge(property_listing, criteria, metrics, valuation)
+    score_components = _score_components(valuation, property_listing)
+    score = max(0, min(100, round(sum(score_components.values()))))
+
+    if value_gap > REJECT_GAP_THRESHOLD:
+        recommendation = AnalysisRecommendation.REJECT
+    elif value_gap > SHORTLIST_MAX_GAP:
+        recommendation = AnalysisRecommendation.REVIEW
+    elif judgment.recommendation == AnalysisRecommendation.REJECT:
         recommendation = AnalysisRecommendation.REJECT
     elif judgment.recommendation == AnalysisRecommendation.RESEARCH:
         recommendation = AnalysisRecommendation.REVIEW
     else:
-        recommendation = judgment.recommendation
+        recommendation = AnalysisRecommendation.SHORTLIST
+
+    gap_percent = f"{value_gap:+.1%}"
+    if value_gap > REJECT_GAP_THRESHOLD:
+        value_context = (
+            f"The asking price is {gap_percent} above the comparable-based market value."
+        )
+    elif value_gap > SHORTLIST_MAX_GAP:
+        value_context = (
+            f"The asking price is {gap_percent} above the comparable-based market "
+            "value, which warrants human review."
+        )
+    else:
+        value_context = (
+            f"The asking price is {gap_percent} versus the comparable-based market value."
+        )
 
     return InvestmentAnalysis(
         metrics=metrics,
-        score=max(0, min(100, round(gross_yield * 1_000))),
+        score=score,
         recommendation=recommendation,
-        thesis=judgment.thesis,
+        thesis=f"{value_context} {judgment.thesis}",
         assumptions=[
-            "Gross yield equals annual rent divided by asking price.",
             "Acquisition costs are estimated at 10% of purchase price.",
+            (
+                "The estimated market value is the living area multiplied by the median "
+                "price per square metre of comparable listings in the same area and "
+                "condition bucket."
+            ),
         ],
         strengths=judgment.strengths,
         risks=judgment.risks,
         evidence=property_listing.evidence,
+        valuation=valuation,
+        score_components=score_components,
     )
 
