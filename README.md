@@ -116,6 +116,36 @@ variants are tried (default 3 search calls per search,
 `PROPERTYSCOUT_SEARCH_QUERY_LIMIT`), with candidate URLs deduplicated across
 queries. These budgets exclude the existing comparable-property searches.
 
+## Standalone property discovery MVP
+
+`propertyscout.discovery` is a standalone pipeline outside the LangGraph
+workflow: it runs authenticated Keenable searches, fetches portal index pages
+through the keyless public Keenable fetch endpoint, extracts the individual
+listing URLs they link to (kleinanzeigen, immobilo, yourimmo, immowelt,
+meinestadt exposes), fetches each listing page, deduplicates URLs across
+portals, validates every page against the same gates as the graph discovery
+(see `docs/workflow.md`), and writes a CSV report covering the complete
+inventory: complete, incomplete, rejected, quarantined, index-page,
+fetch-failed, and budget-exhausted candidates, including a `matches_criteria`
+column and rejection reasons.
+
+Live search requires `KEENABLE_API_KEY` — there is no silent keyless fallback
+for search. Page fetches always use the keyless public endpoint. Request
+budgets are hard limits without retries or early stopping: 10 search calls,
+10 index-page fetches, and 20 individual-listing fetches per run. Cross-portal
+records are merged only on verified shared expose/source references; similar
+records without such a reference are merely flagged as possible duplicates.
+
+```bash
+./.venv/bin/python -m propertyscout.discovery \
+  --city Düsseldorf --budget 300000 --postcode 40597 \
+  --rooms 2 --min-area 50 --output discovery.csv
+```
+
+The CSV goes to stdout unless `--output` is given; a run summary is printed to
+stderr. Offline behavior is verified by replaying the captured pages in
+`tests/fixtures/` (`tests/test_discovery.py`); no live API calls happen in tests.
+
 ## Deal pipeline dashboard
 
 Opening `/app/` also shows a persistent deal pipeline below the search form. Every
