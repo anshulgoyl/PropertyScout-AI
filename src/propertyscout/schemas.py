@@ -79,6 +79,14 @@ class ReplyIntent(StrEnum):
     OTHER = "other"
 
 
+class PropertyCondition(StrEnum):
+    RENOVATION_REQUIRED = "renovation_required"
+    PARTIALLY_RENOVATED = "partially_renovated"
+    RENOVATED = "renovated"
+    WELL_MAINTAINED = "well_maintained"
+    NEW_CONSTRUCTION = "new_construction"
+
+
 class Money(StrictModel):
     amount: float = Field(ge=0)
     currency: str = Field(min_length=3, max_length=3, examples=["EUR"])
@@ -124,6 +132,9 @@ class PropertyListing(StrictModel):
     annual_rent: Money | None = None
     description: str | None = None
     features: list[str] = Field(default_factory=list)
+    build_year: int | None = Field(default=None, ge=1800, le=2100)
+    energy_class: str | None = Field(default=None, min_length=1, max_length=4)
+    condition: PropertyCondition | None = None
     listing_url: HttpUrl | None = None
     evidence: list[SourceEvidence] = Field(default_factory=list)
     missing_fields: list[str] = Field(default_factory=list)
@@ -147,6 +158,52 @@ class FinancialMetrics(StrictModel):
     monthly_cash_flow: Money | None = None
 
 
+class MarketValuation(StrictModel):
+    """Deterministic value estimate derived from comparable listings.
+
+    ``estimated_market_value`` is the living area multiplied by the adjusted
+    comparable price per square metre. ``value_gap`` is the relative difference
+    between the asking price and the estimate. Python owns every number; the
+    LLM reasoner only receives these validated facts.
+    """
+
+    estimated_market_value: Money
+    price_per_sqm: Money | None = None
+    comp_eur_per_sqm: float = Field(gt=0)
+    value_gap: float
+    comp_count: int = Field(ge=1)
+    condition: PropertyCondition | None = None
+    basis: str
+    adjustments: dict[str, float] = Field(default_factory=dict)
+
+
+class ConditionAverage(StrictModel):
+    """Median price per square metre for one condition bucket of comps."""
+
+    condition: PropertyCondition
+    eur_per_sqm: float = Field(gt=0)
+    comp_count: int = Field(ge=0)
+    source_urls: list[str] = Field(default_factory=list)
+
+
+class MarketBasis(StrictModel):
+    """Comparable-listing basis collected for one search area.
+
+    Built once per user search from the discovery provider and attached to every
+    deal thread of that search. Overall and per-condition medians give the
+    Investment Analyst a local market reference with traceable sources.
+    """
+
+    city: str
+    postal_code: str | None = None
+    property_type: str
+    overall_eur_per_sqm: float = Field(gt=0)
+    overall_comp_count: int = Field(ge=0)
+    by_condition: list[ConditionAverage] = Field(default_factory=list)
+    retrieved_at: datetime
+    source: str = "Keenable comparable-listing search"
+
+
 class InvestmentJudgment(StrictModel):
     """Qualitative judgment produced by an analyst reasoner or LLM."""
 
@@ -166,6 +223,8 @@ class InvestmentAnalysis(StrictModel):
     risks: list[str] = Field(default_factory=list)
     missing_critical_data: list[str] = Field(default_factory=list)
     evidence: list[SourceEvidence] = Field(default_factory=list)
+    valuation: MarketValuation | None = None
+    score_components: dict[str, float] | None = None
 
     @model_validator(mode="after")
     def prevent_confident_result_with_missing_critical_data(self) -> InvestmentAnalysis:

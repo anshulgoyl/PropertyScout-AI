@@ -14,6 +14,7 @@ from propertyscout.schemas import (
     InboundReply,
     InvestmentAnalysis,
     InvestmentCriteria,
+    MarketBasis,
     MeetingBrief,
     MeetingDetails,
     OutreachDraft,
@@ -41,6 +42,7 @@ class DealState(TypedDict):
 
     candidate_properties: NotRequired[list[PropertyListing]]
     property: NotRequired[PropertyListing]
+    market_basis: NotRequired[MarketBasis]
     scout_assessment: NotRequired[ScoutAssessment]
     analysis: NotRequired[InvestmentAnalysis]
     outcome: NotRequired[WorkflowOutcome]
