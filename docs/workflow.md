@@ -20,6 +20,18 @@ deterministic normalization verifies purchase intent, target location, source UR
 and asking price. The original URL, retrieval timestamp, and snippet are retained
 as evidence.
 
+The Investment Analyst values every candidate against a comparable market basis.
+At search time the discovery provider additionally collects comparable listings for
+the same area (purchase intent, matching property type, postcode preferred) until a
+configurable minimum pool size is reached. Python computes the overall median price
+per square metre and one median per extracted condition bucket, and every comp keeps
+its source URL as evidence. The estimated market value is the living area multiplied
+by the matching condition median, with a documented fallback adjustment when too few
+comps share the condition. Routing follows the value gap between the asking price
+and the estimate. Gross yield is informational only: renting potential is evaluated
+in a later stage, so missing rent never blocks the analysis. A missing living area
+or an empty comparable pool routes to research instead of inventing market numbers.
+
 After a contact is selected, the Outreach Agent creates a draft but has no sending tool. The draft's contact ID and email must match the selected contact. LangGraph then interrupts on the exact recipient, subject, and body; the approved final text and approval record are persisted before the workflow completes.
 
 The approved draft is passed to a separate `EmailGateway` tool boundary. The current gateway is memory-only and sends nothing externally. The send node derives a stable SHA-256 idempotency key from the workflow ID and exact approved message, so replaying a node returns the original receipt instead of creating another message.

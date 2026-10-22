@@ -33,7 +33,8 @@ This workspace uses Python 3.12 and uv. The project-local uv executable created 
 The demo runs three independent property threads:
 
 - an above-budget property rejected by the Market Scout
-- a property with missing rent data routed to research
+- a property valued against the comparable market basis before approval (renting
+  potential is evaluated in a later stage)
 - a promising property paused and resumed through shortlist, contact, outreach,
   inbound reply, and meeting scheduling
 
@@ -75,15 +76,18 @@ checks.
 Keenable works without a key at its public rate limit. Set `KEENABLE_API_KEY` to
 use an authenticated allowance. This is general web discovery, not a licensed
 real-estate feed: snippets may be incomplete or stale, so every normalized listing
-retains its source URL and excerpt and missing financial data routes to research.
+retains its source URL and excerpt, and deals without a living area or a usable
+comparable basis route to research instead of receiving an invented valuation.
 
 ## Deal pipeline dashboard
 
 Opening `/app/` also shows a persistent deal pipeline below the search form. Every
 persisted deal appears with a six-step stage tracker, a status badge (`Needs your
 approval`, `In progress`, `Needs research`, `Dormant`, `Completed`, `Rejected`),
-and a Deal Score badge with gross yield and monthly cash flow when the Investment
-Analyst produced them. Deals waiting for a human decision render the matching
+a Deal Score badge with gross yield and monthly cash flow when the Investment
+Analyst produced them, and a market-valuation panel showing the estimated market
+value, the comparable €/m² reference, and the price gap versus the estimate. Deals
+waiting for a human decision render the matching
 approval panel: shortlist decisions, contact selection, outreach editing, the
 simulated broker-reply form, and out-of-policy schedule approvals. Approving
 outreach always asks for confirmation before it sends through the configured

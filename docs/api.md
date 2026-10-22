@@ -125,10 +125,14 @@ belong to this search-stage contract; the workflow requests them later when need
 
 Each search creates a separate persisted deal thread for every normalized public
 candidate. Results must contain purchase intent, the target location, a source URL,
-and an extractable asking price. Python parses price, area, rooms, postcode, and
-common features; it never invents missing fields. Listings without rental income
-continue through the graph as `needs_research` rather than receiving a confident
-investment score.
+and an extractable asking price. Python parses price, area, rooms, postcode, build
+year, energy class, and condition; it never invents missing fields.
+
+Every search also collects a comparable-listing basis for the same area before the
+deals start. The basis (overall and per-condition median €/m² with source URLs) is
+attached to every deal thread of that search, and the Investment Analyst values
+candidates against it. Deals without a usable basis route to research instead of
+being valued.
 
 Keenable is a general web-search API rather than a licensed property-data feed.
 Pages may be stale, aggregate several listings, disappear, or prohibit downstream

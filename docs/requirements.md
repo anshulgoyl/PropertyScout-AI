@@ -27,6 +27,8 @@ The MVP may use fixture data. Live marketplace integrations are a later mileston
 
 The Investment Analyst must produce a structured analysis with assumptions, financial metrics, risks, missing information, supporting evidence, a score, and a recommendation.
 
+The analysis is value-based: it estimates the market value from comparable listings discovered for the same area and similar condition, and routes on the gap between the asking price and that estimate. Renting potential is evaluated in a later stage and never blocks or drives the analysis.
+
 The score must not hide missing critical data. A property with insufficient information must be routed to research or review rather than presented as confidently investable.
 
 ### FR-4: Shortlist decision
