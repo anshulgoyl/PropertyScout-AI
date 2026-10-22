@@ -16,7 +16,11 @@ from pydantic import BaseModel, Field
 
 from propertyscout.analyst import build_market_basis, create_nebius_reasoner
 from propertyscout.bootstrap import initial_state, initial_state_for_listing
-from propertyscout.config import llm_enabled_from_env
+from propertyscout.config import (
+    detail_fetch_limit_from_env,
+    llm_enabled_from_env,
+    search_query_limit_from_env,
+)
 from propertyscout.market_search import (
     KeenableListingSearchService,
     ListingSearchError,
@@ -195,7 +199,10 @@ def create_app(
     use_llm: bool | None = None,
 ) -> FastAPI:
     database_path = Path(database_path)
-    selected_listing_search = listing_search_service or KeenableListingSearchService()
+    selected_listing_search = listing_search_service or KeenableListingSearchService(
+        detail_fetch_limit=detail_fetch_limit_from_env(),
+        search_query_limit=search_query_limit_from_env(),
+    )
     selected_use_llm = llm_enabled_from_env() if use_llm is None else use_llm
     graph_options = (
         {

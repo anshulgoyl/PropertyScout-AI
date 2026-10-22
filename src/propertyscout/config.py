@@ -22,6 +22,31 @@ def llm_enabled_from_env() -> bool:
     )
 
 
+def _bounded_env_int(name: str, default: int, maximum: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if not 0 <= value <= maximum:
+        raise ValueError(f"{name} must be between 0 and {maximum}")
+    return value
+
+
+def detail_fetch_limit_from_env() -> int:
+    """Detail-page fetches allowed per search; 0 disables page fetching."""
+
+    return _bounded_env_int("PROPERTYSCOUT_DETAIL_FETCH_LIMIT", default=3, maximum=10)
+
+
+def search_query_limit_from_env() -> int:
+    """Search API calls allowed per search, including the primary query."""
+
+    return _bounded_env_int("PROPERTYSCOUT_SEARCH_QUERY_LIMIT", default=3, maximum=10)
+
+
 @dataclass(frozen=True)
 class ModelSettings:
     provider: str

@@ -95,7 +95,26 @@ only when its title and snippet describe exactly one property:
 
 Rejected candidates and their reasons are retained on the search service
 (`KeenableListingSearchService.last_rejections`) after each search for
-diagnostics.
+diagnostics, alongside `last_incomplete` (verified candidates still missing
+the living area or room count) and `last_fetches` (detail-page fetch outcomes,
+including failures and price discrepancies).
+
+Discovery then verifies candidates before analysis. Snippets alone often lack
+the living area, room count, or price, so the service fetches a bounded number
+of detail pages through the Keenable page-fetch tool — enrichment candidates
+first, then price-recovery candidates — default 3 fetches per search
+(`PROPERTYSCOUT_DETAIL_FETCH_LIMIT`, 0 disables). A fetched page must still
+describe exactly one property in the target city. A page price that conflicts
+with the snippet price by more than 0.5% is adopted only when the page
+identity is clear (single price, matching or absent postal code); both values
+are always recorded for verification, otherwise the candidate is quarantined.
+Only complete listings — price, living area, room count, location, and source
+URL attributable to one property — proceed to automated analysis.
+
+When the primary German query yields no verified listing, bounded fallback
+variants are tried (default 3 search calls per search,
+`PROPERTYSCOUT_SEARCH_QUERY_LIMIT`), with candidate URLs deduplicated across
+queries. These budgets exclude the existing comparable-property searches.
 
 ## Deal pipeline dashboard
 

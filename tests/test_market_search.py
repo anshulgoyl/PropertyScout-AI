@@ -1,18 +1,23 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from propertyscout.analyst import build_market_basis
 from propertyscout.bootstrap import default_criteria
+from propertyscout.config import detail_fetch_limit_from_env, search_query_limit_from_env
 from propertyscout.fixtures import sample_comparables
 from propertyscout.graph import create_state_serializer
 from propertyscout.market_search import (
     KeenableListingSearchService,
     build_property_query,
+    canonical_url,
     city_aliases,
     comparable_queries,
     eur_price_values,
     extract_condition,
     normalize_search_result,
+    search_queries,
 )
 from propertyscout.nodes import market_scout
 from propertyscout.schemas import InvestmentCriteria, Money, PropertyCondition
@@ -110,6 +115,16 @@ class QueuedKeenableClient:
     def invoke(self, tool_input):
         self.inputs.append(tool_input)
         return self.responses.pop(0) if self.responses else []
+
+
+class FakeKeenableFetch:
+    def __init__(self, pages):
+        self.pages = dict(pages)
+        self.calls = []
+
+    def invoke(self, tool_input):
+        self.calls.append(tool_input)
+        return self.pages.get(tool_input["url"], "fetch unavailable")
 
 
 def test_normalizer_extracts_value_signals() -> None:
@@ -385,7 +400,9 @@ def test_rental_listings_are_rejected_as_rental_intent() -> None:
         "snippet": "3 Zimmer, 88 m², zur Vermietung ab sofort.",
     }
 
-    service = KeenableListingSearchService(FakeKeenableClient([rental, rental_etw]))
+    service = KeenableListingSearchService(
+        FakeKeenableClient([rental, rental_etw]), search_query_limit=1
+    )
 
     assert service.search(duesseldorf_criteria()) == []
     assert service.last_rejections == [
@@ -438,7 +455,9 @@ def test_multi_price_aggregator_page_is_quarantined() -> None:
         ),
     }
 
-    service = KeenableListingSearchService(FakeKeenableClient([result]))
+    service = KeenableListingSearchService(
+        FakeKeenableClient([result]), search_query_limit=1
+    )
 
     assert service.search(duesseldorf_criteria()) == []
     assert service.last_rejections == [
@@ -460,7 +479,9 @@ def test_multi_postcode_aggregator_page_is_quarantined() -> None:
         ),
     }
 
-    service = KeenableListingSearchService(FakeKeenableClient([result]))
+    service = KeenableListingSearchService(
+        FakeKeenableClient([result]), search_query_limit=1
+    )
 
     assert service.search(duesseldorf_criteria()) == []
     assert service.last_rejections[0]["reasons"] == ["multi-listing-page"]
@@ -487,7 +508,10 @@ def test_single_property_listing_within_all_criteria_passes_scout() -> None:
 def test_captured_natural_query_candidates_respect_hard_filters() -> None:
     criteria = duesseldorf_criteria()
     listings = KeenableListingSearchService(
-        FakeKeenableClient(captured_results("keenable_duesseldorf_natural_query.json"))
+        QueuedKeenableClient(
+            [captured_results("keenable_duesseldorf_natural_query.json")]
+        ),
+        fetch_client=FakeKeenableFetch({}),
     ).search(criteria)
 
     assert [listing.asking_price.amount for listing in listings] == [
@@ -521,7 +545,10 @@ def test_captured_duesseldorf_snapshots_replay_with_quarantine() -> None:
     criteria = duesseldorf_criteria()
 
     pipeline = KeenableListingSearchService(
-        FakeKeenableClient(captured_results("keenable_duesseldorf_pipeline_query.json"))
+        QueuedKeenableClient(
+            [captured_results("keenable_duesseldorf_pipeline_query.json")]
+        ),
+        fetch_client=FakeKeenableFetch({}),
     )
     assert pipeline.search(criteria) == []
     pipeline_reasons = [entry["reasons"] for entry in pipeline.last_rejections]
@@ -531,9 +558,13 @@ def test_captured_duesseldorf_snapshots_replay_with_quarantine() -> None:
     assert pipeline_reasons.count(["multi-listing-page"]) == 2
     assert sum("rental-intent" in reasons for reasons in pipeline_reasons) == 6
     assert sum("no-price" in reasons for reasons in pipeline_reasons) == 8
+    assert pipeline.last_fetches[0]["status"] == "fetch-error"
 
     natural = KeenableListingSearchService(
-        FakeKeenableClient(captured_results("keenable_duesseldorf_natural_query.json"))
+        QueuedKeenableClient(
+            [captured_results("keenable_duesseldorf_natural_query.json")]
+        ),
+        fetch_client=FakeKeenableFetch({}),
     )
     listings = natural.search(criteria)
     assert [listing.asking_price.amount for listing in listings] == [
@@ -548,8 +579,360 @@ def test_captured_duesseldorf_snapshots_replay_with_quarantine() -> None:
     assert sum("no-city-match" in reasons for reasons in natural_reasons) == 1
 
     site_scoped = KeenableListingSearchService(
-        FakeKeenableClient(captured_results("keenable_duesseldorf_site_scoped_query.json"))
+        QueuedKeenableClient(
+            [captured_results("keenable_duesseldorf_site_scoped_query.json")]
+        ),
+        fetch_client=FakeKeenableFetch({}),
     )
     assert site_scoped.search(criteria) == []
     assert len(site_scoped.last_rejections) == 10
     assert all(site_scoped.last_rejections)
+
+
+def test_search_queries_primary_then_fallback_variants() -> None:
+    queries = search_queries(duesseldorf_criteria())
+
+    assert queries == [
+        "Eigentumswohnung Düsseldorf kaufen bis 551001 EUR 2 Zimmer 50 m²",
+        "Eigentumswohnung Düsseldorf kaufen bis 551001 EUR",
+        "Eigentumswohnung kaufen Düsseldorf",
+    ]
+
+    cologne = default_criteria()
+    cologne_queries = search_queries(cologne)
+    assert cologne_queries[0] == build_property_query(cologne)
+    assert len(cologne_queries) == 3
+
+
+def test_canonical_url_strips_tracking_and_keeps_identifiers() -> None:
+    assert (
+        canonical_url("https://example.com/listing/123?utm_source=x&fbclid=y&id=9")
+        == "https://example.com/listing/123?id=9"
+    )
+    assert (
+        canonical_url("https://Example.com/Listing/123/")
+        == "https://example.com/Listing/123"
+    )
+    assert (
+        canonical_url(
+            "https://immobilienscout24.de/anbieten?amp;utm_campaign=x&amp;utm_source=y"
+        )
+        == "https://immobilienscout24.de/anbieten"
+    )
+
+
+def test_enrichment_fetches_page_for_incomplete_listing() -> None:
+    incomplete = {
+        "title": "Eigentumswohnung in Düsseldorf-Benrath",
+        "url": "https://example.com/listing/etw",
+        "snippet": "Kaufpreis 295.000 € in Düsseldorf.",
+    }
+    fetch = FakeKeenableFetch(
+        {
+            "https://example.com/listing/etw": {
+                "title": "Eigentumswohnung in Düsseldorf-Benrath",
+                "content": (
+                    "Kaufpreis 295.000 €\nWohnfläche: 68 m²\n3 Zimmer\n"
+                    "Baujahr 1990\nBalkon\n40229 Düsseldorf"
+                ),
+            }
+        }
+    )
+    search = FakeKeenableClient([incomplete])
+    service = KeenableListingSearchService(
+        search, fetch_client=fetch, search_query_limit=1
+    )
+
+    listings = service.search(duesseldorf_criteria())
+
+    assert len(listings) == 1
+    listing = listings[0]
+    assert listing.asking_price.amount == 295_000
+    assert listing.living_area_sqm == 68
+    assert listing.room_count == 3
+    assert listing.postal_code == "40229"
+    assert listing.build_year == 1990
+    assert len(listing.evidence) == 2
+    assert listing.evidence[1].source_name == "Keenable page fetch"
+    assert len(search.inputs) == 1
+    assert fetch.calls == [{"url": "https://example.com/listing/etw"}]
+    assert service.last_fetches == [
+        {"url": "https://example.com/listing/etw", "status": "accepted"}
+    ]
+    assert service.last_incomplete == []
+
+
+def test_fetch_recovers_listing_for_no_price_candidate() -> None:
+    fetch = FakeKeenableFetch(
+        {
+            "https://www.kleinanzeigen.de/s-wohnung-kaufen/benrath/2-zimmer-wohnung/k0c196l16753": {
+                "title": "Exklusive 3-Zimmer-Eigentumswohnung in Düsseldorf-Benrath",
+                "content": (
+                    "Kaufpreis 689.000 €\nWohnfläche: 114,2 m²\n3 Zimmer\n"
+                    "40229 Düsseldorf-Benrath\nBaujahr 2015\nBalkon"
+                ),
+            }
+        }
+    )
+    search = QueuedKeenableClient(
+        [captured_results("keenable_duesseldorf_pipeline_query.json")]
+    )
+    service = KeenableListingSearchService(search, fetch_client=fetch)
+
+    listings = service.search(duesseldorf_criteria())
+
+    assert len(listings) == 1
+    listing = listings[0]
+    assert listing.asking_price.amount == 689_000
+    assert listing.living_area_sqm == 114.2
+    assert listing.room_count == 3
+    assert listing.postal_code == "40229"
+    assert str(listing.listing_url).startswith("https://www.kleinanzeigen.de/")
+    assert len(search.inputs) == 1
+    # Two no-price candidates (kleinanzeigen, von-poll) are fetched; only the
+    # one with a real detail page is recovered.
+    assert len(fetch.calls) == 2
+    assert service.last_fetches[0]["status"] == "accepted"
+    assert service.last_fetches[1]["status"] == "fetch-error"
+    assert len(service.last_incomplete) == 0
+
+
+def test_detail_fetch_limit_bounds_fetch_calls() -> None:
+    results = [
+        {
+            "title": f"Eigentumswohnung in Düsseldorf {index}",
+            "url": f"https://example.com/listing/{index}",
+            "snippet": "Preis auf Anfrage in Düsseldorf.",
+        }
+        for index in range(4)
+    ]
+    fetch = FakeKeenableFetch({})
+    service = KeenableListingSearchService(
+        FakeKeenableClient(results),
+        fetch_client=fetch,
+        detail_fetch_limit=2,
+        search_query_limit=1,
+    )
+
+    assert service.search(duesseldorf_criteria()) == []
+
+    assert len(fetch.calls) == 2
+    assert len(service.last_fetches) == 2
+    assert all(entry["status"] == "fetch-error" for entry in service.last_fetches)
+    assert sum(
+        entry["reasons"] == ["no-price"] for entry in service.last_rejections
+    ) == 4
+
+
+def test_fetch_error_records_failure_and_uses_fallback_query() -> None:
+    fetch = FakeKeenableFetch({})
+    search = QueuedKeenableClient(
+        [
+            captured_results("keenable_duesseldorf_pipeline_query.json"),
+            captured_results("keenable_duesseldorf_natural_query.json"),
+        ]
+    )
+    service = KeenableListingSearchService(search, fetch_client=fetch)
+
+    listings = service.search(duesseldorf_criteria())
+
+    assert [listing.asking_price.amount for listing in listings] == [
+        195_000.0,
+        515_000.0,
+        669_999.0,
+    ]
+    assert len(search.inputs) == 2
+    assert service.last_fetches[0]["status"] == "fetch-error"
+    assert len(fetch.calls) == 3
+
+
+def test_fetched_multi_listing_page_is_rejected() -> None:
+    incomplete = {
+        "title": "Eigentumswohnung in Düsseldorf",
+        "url": "https://example.com/listing/multi",
+        "snippet": "Kaufpreis 295.000 € in Düsseldorf.",
+    }
+    fetch = FakeKeenableFetch(
+        {
+            "https://example.com/listing/multi": {
+                "title": "Eigentumswohnung in Düsseldorf",
+                "content": (
+                    "Kaufpreis 295.000 €\nKaufpreis 250.000 €\n"
+                    "40217 Düsseldorf\n40589 Düsseldorf"
+                ),
+            }
+        }
+    )
+    service = KeenableListingSearchService(
+        FakeKeenableClient([incomplete]),
+        fetch_client=fetch,
+        search_query_limit=1,
+    )
+
+    assert service.search(duesseldorf_criteria()) == []
+
+    assert service.last_fetches[0]["status"] == "rejected"
+    assert service.last_fetches[0]["reasons"] == ["multi-listing-page"]
+    assert service.last_incomplete[0]["reasons"] == ["multi-listing-page"]
+
+
+def test_conflicting_page_price_and_postal_quarantines_candidate() -> None:
+    incomplete = {
+        "title": "Eigentumswohnung in Düsseldorf",
+        "url": "https://example.com/listing/conflict",
+        "snippet": "Kaufpreis 295.000 €\n40217 Düsseldorf.",
+    }
+    fetch = FakeKeenableFetch(
+        {
+            "https://example.com/listing/conflict": {
+                "title": "Eigentumswohnung in Düsseldorf",
+                "content": (
+                    "Kaufpreis 350.000 €\n40213 Düsseldorf\n"
+                    "Wohnfläche: 68 m²\n3 Zimmer"
+                ),
+            }
+        }
+    )
+    service = KeenableListingSearchService(
+        FakeKeenableClient([incomplete]),
+        fetch_client=fetch,
+        search_query_limit=1,
+    )
+
+    assert service.search(duesseldorf_criteria()) == []
+
+    assert service.last_fetches[0]["status"] == "rejected"
+    assert "conflicting-attributes" in service.last_fetches[0]["reasons"]
+    assert "price-conflict" in service.last_fetches[0]["reasons"]
+    assert service.last_fetches[0]["prices"] == {
+        "snippet": 295_000.0,
+        "page": 350_000.0,
+    }
+
+
+def test_page_price_adopted_with_warning_when_identity_is_clear() -> None:
+    incomplete = {
+        "title": "Eigentumswohnung in Düsseldorf",
+        "url": "https://example.com/listing/update",
+        "snippet": "Kaufpreis 295.000 € in Düsseldorf.",
+    }
+    fetch = FakeKeenableFetch(
+        {
+            "https://example.com/listing/update": {
+                "title": "Eigentumswohnung in Düsseldorf",
+                "content": (
+                    "Kaufpreis 298.000 €\nWohnfläche: 68 m²\n3 Zimmer\nDüsseldorf"
+                ),
+            }
+        }
+    )
+    service = KeenableListingSearchService(
+        FakeKeenableClient([incomplete]),
+        fetch_client=fetch,
+        search_query_limit=1,
+    )
+
+    listings = service.search(duesseldorf_criteria())
+
+    assert listings[0].asking_price.amount == 298_000
+    assert listings[0].living_area_sqm == 68
+    assert listings[0].room_count == 3
+    assert service.last_fetches[0]["status"] == "price-updated"
+    assert service.last_fetches[0]["prices"] == {
+        "snippet": 295_000.0,
+        "page": 298_000.0,
+    }
+
+
+def test_duplicate_urls_are_deduplicated_across_queries() -> None:
+    incomplete_snippet = "Kaufpreis 295.000 € in Düsseldorf."
+    search = QueuedKeenableClient(
+        [
+            [
+                {
+                    "title": "Eigentumswohnung in Düsseldorf",
+                    "url": "https://example.com/listing/1?utm_source=portal",
+                    "snippet": incomplete_snippet,
+                }
+            ],
+            [
+                {
+                    "title": "Eigentumswohnung in Düsseldorf",
+                    "url": "https://example.com/listing/1?utm_source=other",
+                    "snippet": incomplete_snippet,
+                }
+            ],
+        ]
+    )
+    fetch = FakeKeenableFetch({})
+    service = KeenableListingSearchService(search, fetch_client=fetch)
+
+    listings = service.search(duesseldorf_criteria())
+
+    assert listings == []
+    assert len(search.inputs) == 3
+    # The same canonical URL is fetched once, never again across fallback queries.
+    assert len(fetch.calls) == 1
+    assert sum(
+        entry["reasons"] == ["duplicate-url"] for entry in service.last_rejections
+    ) == 1
+
+
+def test_incomplete_listings_stay_out_of_search_results() -> None:
+    complete = {
+        "title": "Eigentumswohnung in Düsseldorf",
+        "url": "https://example.com/listing/complete",
+        "snippet": "Kaufpreis 295.000 €, 68 m², 3 Zimmer in Düsseldorf.",
+    }
+    incomplete = {
+        "title": "Eigentumswohnung in Düsseldorf",
+        "url": "https://example.com/listing/incomplete",
+        "snippet": "Kaufpreis 320.000 € in Düsseldorf.",
+    }
+    fetch = FakeKeenableFetch({})
+    service = KeenableListingSearchService(
+        FakeKeenableClient([complete, incomplete]),
+        fetch_client=fetch,
+        detail_fetch_limit=0,
+        search_query_limit=1,
+    )
+
+    listings = service.search(duesseldorf_criteria())
+
+    assert [str(listing.listing_url) for listing in listings] == [
+        "https://example.com/listing/complete"
+    ]
+    assert len(service.last_incomplete) == 1
+    assert service.last_incomplete[0]["missing"] == ["living_area", "room_count"]
+    assert fetch.calls == []
+
+
+def test_search_query_budget_is_respected() -> None:
+    search = QueuedKeenableClient([[], []])
+    fetch = FakeKeenableFetch({})
+    service = KeenableListingSearchService(
+        search, fetch_client=fetch, search_query_limit=2
+    )
+
+    assert service.search(duesseldorf_criteria()) == []
+
+    assert len(search.inputs) == 2
+
+
+def test_discovery_budget_env_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PROPERTYSCOUT_DETAIL_FETCH_LIMIT", "1")
+    monkeypatch.setenv("PROPERTYSCOUT_SEARCH_QUERY_LIMIT", "5")
+    assert detail_fetch_limit_from_env() == 1
+    assert search_query_limit_from_env() == 5
+
+    monkeypatch.delenv("PROPERTYSCOUT_DETAIL_FETCH_LIMIT", raising=False)
+    monkeypatch.delenv("PROPERTYSCOUT_SEARCH_QUERY_LIMIT", raising=False)
+    assert detail_fetch_limit_from_env() == 3
+    assert search_query_limit_from_env() == 3
+
+    monkeypatch.setenv("PROPERTYSCOUT_DETAIL_FETCH_LIMIT", "abc")
+    with pytest.raises(ValueError):
+        detail_fetch_limit_from_env()
+    monkeypatch.setenv("PROPERTYSCOUT_DETAIL_FETCH_LIMIT", "11")
+    with pytest.raises(ValueError):
+        detail_fetch_limit_from_env()

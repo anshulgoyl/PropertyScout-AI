@@ -5,9 +5,10 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime
 from typing import Any, Protocol
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import NAMESPACE_URL, uuid5
 
-from langchain_keenable import KeenableSearch
+from langchain_keenable import KeenableFetch, KeenableSearch
 
 from propertyscout.fixtures import sample_comparables, sample_properties
 from propertyscout.schemas import (
@@ -133,6 +134,30 @@ _CONDITION_MARKERS: tuple[tuple[PropertyCondition, tuple[str, ...]], ...] = (
         PropertyCondition.WELL_MAINTAINED,
         ("neuwertig", "gepflegt", "well maintained", "well-kept"),
     ),
+)
+
+
+# A snippet and its fetched detail page may disagree slightly on formatting;
+# differences beyond this share of the price are treated as a conflict.
+PRICE_CONFLICT_TOLERANCE = 0.005
+DEFAULT_DETAIL_FETCH_LIMIT = 3
+DEFAULT_SEARCH_QUERY_LIMIT = 3
+_TRACKING_QUERY_PARAMS = frozenset(
+    {
+        "amp",
+        "fbclid",
+        "gclid",
+        "mc_cid",
+        "mc_eid",
+        "msclkid",
+        "ref",
+        "referrer",
+        "utm_campaign",
+        "utm_content",
+        "utm_medium",
+        "utm_source",
+        "utm_term",
+    }
 )
 
 
@@ -268,6 +293,201 @@ def rejection_reasons(
     return reasons
 
 
+def _is_tracking_param(key: str) -> bool:
+    normalized = key.casefold().removeprefix("amp;")
+    return normalized in _TRACKING_QUERY_PARAMS
+
+
+def canonical_url(url: str) -> str:
+    """Normalize a listing URL for deduplication across queries.
+
+    Lowercases the scheme and host, drops tracking parameters and fragments,
+    and removes trailing path slashes while preserving property identifiers
+    and meaningful query parameters.
+    """
+
+    text = url.strip()
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        return text.rstrip("/")
+    if not parts.scheme or not parts.netloc:
+        return text.rstrip("/")
+    query_items = [
+        (key, value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        if not _is_tracking_param(key)
+    ]
+    return urlunsplit(
+        (
+            parts.scheme.lower(),
+            parts.netloc.lower(),
+            parts.path.rstrip("/"),
+            urlencode(query_items),
+            "",
+        )
+    )
+
+
+def is_complete_listing(listing: PropertyListing) -> bool:
+    """True when price, area, rooms, location, and URL belong to one property.
+
+    Only such listings are verified enough to proceed to automated investment
+    analysis; incomplete ones are quarantined for verification instead of
+    being silently accepted.
+    """
+
+    return (
+        listing.asking_price is not None
+        and listing.living_area_sqm is not None
+        and listing.room_count is not None
+        and bool(listing.city)
+        and bool(listing.listing_url)
+    )
+
+
+def _price_within_tolerance(first: float, second: float) -> bool:
+    reference = max(abs(first), abs(second))
+    return abs(first - second) <= reference * PRICE_CONFLICT_TOLERANCE
+
+
+def merge_page_listing(
+    page: dict[str, Any],
+    url: str,
+    criteria: InvestmentCriteria,
+    existing: PropertyListing | None,
+) -> tuple[PropertyListing | None, list[str]]:
+    """Merge a fetched detail page into a snippet-derived listing.
+
+    Returns ``(listing, reasons)``. A non-empty reason list quarantines the
+    candidate: the page is unusable, ambiguous, or conflicts with the snippet.
+    Page values are authoritative for area, rooms, build year, energy class,
+    and condition. The asking price is adopted over the snippet price only
+    when the page identity is clear — a single distinct price and a matching
+    or absent postal code — otherwise the candidate is quarantined for
+    verification with both values preserved in the fetch diagnostics.
+    """
+
+    content = str(page.get("content") or "")
+    page_title = str(page.get("title") or "")
+    if not content.strip():
+        return None, ["empty-content"]
+    combined = f"{page_title}\n{content}"
+    normalized = combined.casefold()
+    reasons: list[str] = []
+    aliases = city_aliases(criteria.locations[0])
+    if not any(alias in normalized for alias in aliases):
+        reasons.append("no-city-match")
+    if _has_rental_intent(normalized):
+        reasons.append("rental-intent")
+    price_values = eur_price_values(combined)
+    purchase_prices = sorted({value for value in price_values if value > 10_000})
+    if _is_multi_listing_page(combined, price_values):
+        reasons.append("multi-listing-page")
+    if not purchase_prices and existing is None:
+        reasons.append("no-price")
+    if reasons:
+        return None, reasons
+
+    area_match = _AREA.search(combined)
+    rooms_match = _ROOMS.search(combined)
+    build_year_match = _BUILD_YEAR.search(combined)
+    energy_match = _ENERGY_CLASS.search(combined)
+    postal_codes = _POSTAL_CODE.findall(combined)
+    page_postal = postal_codes[0] if postal_codes else None
+    features = sorted({term for term in _FEATURE_TERMS if term in normalized})
+    fetch_evidence = SourceEvidence(
+        source_name="Keenable page fetch",
+        url=url,
+        retrieved_at=datetime.now(UTC),
+        excerpt=content[:1_000],
+    )
+
+    if existing is not None:
+        snippet_price = existing.asking_price.amount
+        if page_postal and existing.postal_code and page_postal != existing.postal_code:
+            reasons.append("conflicting-attributes")
+        if purchase_prices and not _price_within_tolerance(
+            snippet_price, purchase_prices[0]
+        ):
+            identity_clear = page_postal is None or page_postal == existing.postal_code
+            if not identity_clear:
+                reasons.append("price-conflict")
+        if reasons:
+            return None, reasons
+        updates: dict[str, Any] = {"evidence": [*existing.evidence, fetch_evidence]}
+        if page_postal:
+            updates["postal_code"] = page_postal
+        if purchase_prices:
+            updates["asking_price"] = Money(amount=purchase_prices[0], currency="EUR")
+        if area_match:
+            updates["living_area_sqm"] = _decimal_number(area_match.group("value"))
+        if rooms_match:
+            updates["room_count"] = _decimal_number(rooms_match.group("value"))
+        if build_year_match:
+            updates["build_year"] = int(build_year_match.group("value"))
+        if energy_match:
+            updates["energy_class"] = energy_match.group("value").upper()
+        merged_condition = extract_condition(combined)
+        if merged_condition is not None:
+            updates["condition"] = merged_condition
+        if features:
+            updates["features"] = sorted(set(existing.features) | set(features))
+        return existing.model_copy(update=updates), []
+
+    return (
+        PropertyListing(
+            property_id=uuid5(NAMESPACE_URL, url),
+            source_listing_id=f"keenable-{uuid5(NAMESPACE_URL, url).hex}",
+            title=page_title or url,
+            city=criteria.locations[0],
+            postal_code=page_postal,
+            country_code="DE",
+            property_type=criteria.property_types[0],
+            asking_price=Money(amount=purchase_prices[0], currency="EUR"),
+            living_area_sqm=(
+                _decimal_number(area_match.group("value")) if area_match else None
+            ),
+            room_count=(
+                _decimal_number(rooms_match.group("value")) if rooms_match else None
+            ),
+            build_year=(
+                int(build_year_match.group("value")) if build_year_match else None
+            ),
+            energy_class=(
+                energy_match.group("value").upper() if energy_match else None
+            ),
+            condition=extract_condition(combined),
+            description=content[:2_000],
+            features=features,
+            listing_url=url,
+            evidence=[fetch_evidence],
+            missing_fields=["annual_rent"],
+        ),
+        [],
+    )
+
+
+def search_queries(criteria: InvestmentCriteria) -> list[str]:
+    """Primary search query plus bounded fallback variants, deduplicated."""
+
+    primary = build_property_query(criteria)
+    property_type = criteria.property_types[0]
+    location = criteria.locations[0]
+    search_type = _PROPERTY_TERMS.get(property_type.casefold(), property_type)
+    budget = f"{criteria.maximum_purchase_price.amount:g}"
+    variants = [
+        primary,
+        f"{search_type} {location} kaufen bis {budget} EUR",
+        f"{search_type} kaufen {location}",
+    ]
+    queries: list[str] = []
+    for query in variants:
+        if query and query not in queries:
+            queries.append(query)
+    return queries
+
+
 class ListingSearchService(Protocol):
     def search(self, criteria: InvestmentCriteria) -> list[PropertyListing]: ...
 
@@ -302,37 +522,96 @@ class WebSearchClient(Protocol):
     def invoke(self, tool_input: dict[str, Any]) -> Any: ...
 
 
+class DetailFetchClient(Protocol):
+    """Client returning a fetched page as ``{url, title, content, ...}`` or an error."""
+
+    def invoke(self, tool_input: dict[str, Any]) -> Any: ...
+
+
 class KeenableListingSearchService:
     """Discover public purchase listings through Keenable and normalize snippets.
 
     Rejected candidates and their rejection reasons are preserved on
-    ``last_rejections`` after every ``search`` or ``search_comps`` call so the
-    discovery funnel can be diagnosed without live API calls.
+    ``last_rejections``, incomplete listings on ``last_incomplete``, and fetch
+    outcomes on ``last_fetches`` after every ``search`` or ``search_comps``
+    call so the discovery funnel can be diagnosed without live API calls.
+
+    Only complete listings — price, area, rooms, location, and URL reliably
+    attributable to one property — are returned for automated analysis. The
+    primary German query is retried with bounded fallback variants, and
+    verified candidates missing attributes are enriched through bounded
+    detail-page fetches.
     """
 
-    def __init__(self, client: WebSearchClient | None = None) -> None:
+    def __init__(
+        self,
+        client: WebSearchClient | None = None,
+        fetch_client: DetailFetchClient | None = None,
+        detail_fetch_limit: int = DEFAULT_DETAIL_FETCH_LIMIT,
+        search_query_limit: int = DEFAULT_SEARCH_QUERY_LIMIT,
+    ) -> None:
         self._client = client or KeenableSearch(timeout=30)
+        self._fetch_client = fetch_client or KeenableFetch(timeout=30)
+        self._detail_fetch_limit = max(0, detail_fetch_limit)
+        self._search_query_limit = max(1, search_query_limit)
+        self._reset_diagnostics()
+
+    def _reset_diagnostics(self) -> None:
         self.last_rejections: list[dict[str, Any]] = []
+        self.last_incomplete: list[dict[str, Any]] = []
+        self.last_fetches: list[dict[str, Any]] = []
+        self._fetch_budget = self._detail_fetch_limit
+        self._fetched_urls: set[str] = set()
 
     def search(self, criteria: InvestmentCriteria) -> list[PropertyListing]:
-        self.last_rejections = []
-        query = build_property_query(criteria)
-        raw_results = self._client.invoke({"query": query})
-        if not isinstance(raw_results, list):
-            raise ListingSearchError(f"Keenable search failed: {raw_results}")
-
+        self._reset_diagnostics()
         listings: list[PropertyListing] = []
         seen_urls: set[str] = set()
-        for result in raw_results:
-            listing = normalize_search_result(result, criteria)
-            if listing is None:
-                self._record_rejection(result, criteria)
-                continue
-            if str(listing.listing_url) in seen_urls:
-                self._record_rejection(result, criteria, ["duplicate-url"])
-                continue
-            seen_urls.add(str(listing.listing_url))
-            listings.append(listing)
+        for query in search_queries(criteria)[: self._search_query_limit]:
+            raw_results = self._client.invoke({"query": query})
+            if not isinstance(raw_results, list):
+                raise ListingSearchError(f"Keenable search failed: {raw_results}")
+
+            recovery_pool: list[dict[str, Any]] = []
+            for result in raw_results:
+                if not isinstance(result, dict):
+                    self._record_rejection(result, criteria)
+                    continue
+                raw_url = str(result.get("url") or "")
+                url = canonical_url(raw_url)
+                if url in seen_urls:
+                    self._record_rejection(result, criteria, ["duplicate-url"])
+                    continue
+                seen_urls.add(url)
+                listing = normalize_search_result(result, criteria)
+                if listing is None:
+                    reasons = rejection_reasons(result, criteria)
+                    if reasons == ["no-price"]:
+                        recovery_pool.append(
+                            {
+                                "url": url,
+                                "raw_url": raw_url,
+                                "listing": None,
+                                "result": result,
+                            }
+                        )
+                    else:
+                        self._record_rejection(result, criteria, reasons)
+                    continue
+                if is_complete_listing(listing):
+                    listings.append(listing)
+                else:
+                    recovery_pool.append(
+                        {
+                            "url": url,
+                            "raw_url": raw_url,
+                            "listing": listing,
+                            "result": result,
+                        }
+                    )
+            self._recover_candidates(recovery_pool, criteria, listings)
+            if listings:
+                break
         return listings
 
     def search_comps(
@@ -345,10 +624,10 @@ class KeenableListingSearchService:
 
         Comp gathering is best effort: a failed query is skipped so a partial
         pool from later query variants still forms a basis. The pool is
-        deduplicated by listing URL across all query variants.
+        deduplicated by canonical listing URL across all query variants.
         """
 
-        self.last_rejections = []
+        self._reset_diagnostics()
         pool: list[PropertyListing] = []
         seen_urls: set[str] = set()
         queries = comparable_queries(criteria)[:maximum_queries]
@@ -363,10 +642,11 @@ class KeenableListingSearchService:
                 if listing is None:
                     self._record_rejection(result, comp_criteria)
                     continue
-                if str(listing.listing_url) in seen_urls:
+                url = canonical_url(str(listing.listing_url))
+                if url in seen_urls:
                     self._record_rejection(result, comp_criteria, ["duplicate-url"])
                     continue
-                seen_urls.add(str(listing.listing_url))
+                seen_urls.add(url)
                 pool.append(listing)
             if len(pool) >= minimum_comps:
                 break
@@ -394,6 +674,133 @@ class KeenableListingSearchService:
                 ),
             }
         )
+
+    def _recover_candidates(
+        self,
+        pool: list[dict[str, Any]],
+        criteria: InvestmentCriteria,
+        listings: list[PropertyListing],
+    ) -> None:
+        """Fetch detail pages for incomplete and no-price recovery candidates.
+
+        Enrichment candidates (normalized but missing the living area or room
+        count) are tried before price-recovery candidates. The fetch budget is
+        shared across all queries of one search.
+        """
+
+        ordered = [entry for entry in pool if entry["listing"] is not None]
+        ordered += [entry for entry in pool if entry["listing"] is None]
+        for entry in ordered:
+            if entry["url"] in self._fetched_urls:
+                continue
+            if self._fetch_budget <= 0:
+                self._record_unrecovered(entry, criteria)
+                continue
+            self._fetched_urls.add(entry["url"])
+            self._fetch_budget -= 1
+            page, error = self._fetch_page(entry["raw_url"])
+            if error is not None:
+                self.last_fetches.append(
+                    {"url": entry["raw_url"], "status": "fetch-error", "error": error}
+                )
+                self._record_unrecovered(entry, criteria)
+                continue
+            page_prices = [
+                value
+                for value in eur_price_values(
+                    f"{page.get('title') or ''}\n{page.get('content') or ''}"
+                )
+                if value > 10_000
+            ]
+            merged, reasons = merge_page_listing(
+                page, entry["raw_url"], criteria, entry["listing"]
+            )
+            if merged is None:
+                record: dict[str, Any] = {
+                    "url": entry["raw_url"],
+                    "status": "rejected",
+                    "reasons": reasons,
+                }
+                if entry["listing"] is not None and page_prices:
+                    record["prices"] = {
+                        "snippet": entry["listing"].asking_price.amount,
+                        "page": page_prices[0],
+                    }
+                self.last_fetches.append(record)
+                self._record_unrecovered(entry, criteria, reasons)
+                continue
+            self._record_fetch_success(entry, merged)
+            if is_complete_listing(merged):
+                listings.append(merged)
+            else:
+                self._record_incomplete(merged)
+
+    def _fetch_page(self, url: str) -> tuple[Any, str | None]:
+        """Invoke the fetch client; return ``(page, error_message)``.
+
+        The Keenable tool surfaces API and transport errors as a message
+        string (with the API key redacted by the library) instead of raising,
+        so both paths are normalized here without logging secrets.
+        """
+
+        try:
+            page = self._fetch_client.invoke({"url": url})
+        except Exception as exc:  # noqa: BLE001 - boundary errors are recorded, never raised
+            return None, type(exc).__name__[:200]
+        if isinstance(page, dict):
+            return page, None
+        return None, (str(page)[:200] if page else "empty-response")
+
+    def _record_fetch_success(
+        self, entry: dict[str, Any], merged: PropertyListing
+    ) -> None:
+        existing = entry["listing"]
+        record: dict[str, Any] = {"url": entry["raw_url"], "status": "accepted"}
+        if (
+            existing is not None
+            and merged.asking_price.amount != existing.asking_price.amount
+        ):
+            record["status"] = "price-updated"
+            record["prices"] = {
+                "snippet": existing.asking_price.amount,
+                "page": merged.asking_price.amount,
+            }
+        self.last_fetches.append(record)
+
+    def _record_incomplete(
+        self,
+        listing: PropertyListing,
+        reasons: list[str] | None = None,
+    ) -> None:
+        missing = [
+            field
+            for field, value in (
+                ("living_area", listing.living_area_sqm),
+                ("room_count", listing.room_count),
+            )
+            if value is None
+        ]
+        record: dict[str, Any] = {
+            "title": listing.title[:200],
+            "url": str(listing.listing_url),
+            "missing": missing,
+        }
+        if reasons:
+            record["reasons"] = reasons
+        self.last_incomplete.append(record)
+
+    def _record_unrecovered(
+        self,
+        entry: dict[str, Any],
+        criteria: InvestmentCriteria,
+        reasons: list[str] | None = None,
+    ) -> None:
+        """Preserve a candidate that could not be verified through a fetch."""
+
+        if entry["listing"] is None:
+            self._record_rejection(entry["result"], criteria, reasons)
+            return
+        self._record_incomplete(entry["listing"], reasons)
 
 
 def _comps_criteria(
