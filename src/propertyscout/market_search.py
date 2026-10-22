@@ -9,10 +9,11 @@ from uuid import NAMESPACE_URL, uuid5
 
 from langchain_keenable import KeenableSearch
 
-from propertyscout.fixtures import sample_properties
+from propertyscout.fixtures import sample_comparables, sample_properties
 from propertyscout.schemas import (
     InvestmentCriteria,
     Money,
+    PropertyCondition,
     PropertyListing,
     SourceEvidence,
 )
@@ -61,13 +62,71 @@ _FEATURE_TERMS = (
     "garage",
     "terrace",
     "terrasse",
-    "garden",
     "garten",
+    "garden",
 )
+_BUILD_YEAR = re.compile(
+    r"(?:Baujahr|erbaut|gebaut(?:\s+im\s+Jahr)?|built(?:\s+in)?)\s*[:\-]?\s*"
+    r"(?P<value>(?:19|20)\d{2})",
+    re.IGNORECASE,
+)
+_ENERGY_CLASS = re.compile(
+    r"Energie(?:effizienz)?klasse\s*[:\-]?\s*(?:Klasse\s*)?"
+    r"(?P<value>[A-G](?:\+\+)?)",
+    re.IGNORECASE,
+)
+_CONDITION_MARKERS: tuple[tuple[PropertyCondition, tuple[str, ...]], ...] = (
+    (
+        PropertyCondition.RENOVATION_REQUIRED,
+        (
+            "renovierungsbedürftig",
+            "sanierungsbedürftig",
+            "renovation needed",
+            "needs renovation",
+        ),
+    ),
+    (
+        PropertyCondition.PARTIALLY_RENOVATED,
+        ("teilsaniert", "teilweise saniert", "teilrenoviert", "partially renovated"),
+    ),
+    (
+        PropertyCondition.RENOVATED,
+        ("saniert", "renoviert", "modernisiert", "renovated", "modernized"),
+    ),
+    (
+        PropertyCondition.NEW_CONSTRUCTION,
+        ("neubau", "neugebaut", "neu gebaut", "erstbezug", "new build", "newly built"),
+    ),
+    (
+        PropertyCondition.WELL_MAINTAINED,
+        ("neuwertig", "gepflegt", "well maintained", "well-kept"),
+    ),
+)
+
+
+def extract_condition(text: str) -> PropertyCondition | None:
+    """Map the worst condition marker found in the text to a condition enum.
+
+    Markers are evaluated in priority order so that partial-renovation wording
+    is not shadowed by the general ``saniert`` substring it contains.
+    """
+
+    normalized = text.casefold()
+    for condition, markers in _CONDITION_MARKERS:
+        if any(marker in normalized for marker in markers):
+            return condition
+    return None
 
 
 class ListingSearchService(Protocol):
     def search(self, criteria: InvestmentCriteria) -> list[PropertyListing]: ...
+
+    def search_comps(
+        self,
+        criteria: InvestmentCriteria,
+        minimum_comps: int,
+        maximum_queries: int,
+    ) -> list[PropertyListing]: ...
 
 
 class ListingSearchError(RuntimeError):
@@ -79,6 +138,14 @@ class FixtureListingSearchService:
 
     def search(self, criteria: InvestmentCriteria) -> list[PropertyListing]:
         return list(sample_properties().values())
+
+    def search_comps(
+        self,
+        criteria: InvestmentCriteria,
+        minimum_comps: int,
+        maximum_queries: int,
+    ) -> list[PropertyListing]:
+        return sample_comparables()
 
 
 class WebSearchClient(Protocol):
@@ -106,6 +173,63 @@ class KeenableListingSearchService:
             seen_urls.add(str(listing.listing_url))
             listings.append(listing)
         return listings
+
+    def search_comps(
+        self,
+        criteria: InvestmentCriteria,
+        minimum_comps: int = 8,
+        maximum_queries: int = 3,
+    ) -> list[PropertyListing]:
+        """Collect comparable listings until the pool reaches ``minimum_comps``.
+
+        Comp gathering is best effort: a failed query is skipped so a partial
+        pool from later query variants still forms a basis. The pool is
+        deduplicated by listing URL across all query variants.
+        """
+
+        pool: list[PropertyListing] = []
+        seen_urls: set[str] = set()
+        queries = comparable_queries(criteria)[:maximum_queries]
+        for index, query in enumerate(queries):
+            raw_results = self._client.invoke({"query": query})
+            if not isinstance(raw_results, list):
+                continue
+            include_postcode = bool(criteria.postal_codes) and index == 0
+            comp_criteria = _comps_criteria(criteria, include_postcode)
+            for result in raw_results:
+                listing = normalize_search_result(result, comp_criteria)
+                if listing is None or str(listing.listing_url) in seen_urls:
+                    continue
+                seen_urls.add(str(listing.listing_url))
+                pool.append(listing)
+            if len(pool) >= minimum_comps:
+                break
+        return pool
+
+
+def _comps_criteria(
+    criteria: InvestmentCriteria, include_postcode: bool
+) -> InvestmentCriteria:
+    """Criteria used only for comp normalization and location checks."""
+
+    return criteria.model_copy(
+        update={"postal_codes": criteria.postal_codes if include_postcode else []}
+    )
+
+
+def comparable_queries(criteria: InvestmentCriteria) -> list[str]:
+    """Build comp query variants: postcode-scoped first, then city-wide."""
+
+    property_type = criteria.property_types[0]
+    location = criteria.locations[0]
+    search_type = _PROPERTY_TERMS.get(property_type, property_type)
+    base = f"{search_type} kaufen {location}"
+    if criteria.postal_codes:
+        return [
+            f"{base} {criteria.postal_codes[0]}",
+            base,
+        ]
+    return [base]
 
 
 def build_property_query(criteria: InvestmentCriteria) -> str:
@@ -159,6 +283,8 @@ def normalize_search_result(
 
     rooms_match = _ROOMS.search(combined)
     area_match = _AREA.search(combined)
+    build_year_match = _BUILD_YEAR.search(combined)
+    energy_match = _ENERGY_CLASS.search(combined)
     features = [term for term in _FEATURE_TERMS if term in normalized]
     source = SourceEvidence(
         source_name="Keenable web search",
@@ -181,6 +307,13 @@ def normalize_search_result(
         room_count=(
             _decimal_number(rooms_match.group("value")) if rooms_match else None
         ),
+        build_year=(
+            int(build_year_match.group("value")) if build_year_match else None
+        ),
+        energy_class=(
+            energy_match.group("value").upper() if energy_match else None
+        ),
+        condition=extract_condition(combined),
         description=snippet[:2_000],
         features=sorted(set(features)),
         listing_url=url,

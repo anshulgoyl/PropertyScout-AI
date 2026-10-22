@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import statistics
+from datetime import UTC, datetime
 from typing import Protocol
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -12,15 +14,79 @@ from langchain_openai import ChatOpenAI
 from propertyscout.config import ModelSettings
 from propertyscout.schemas import (
     AnalysisRecommendation,
+    ConditionAverage,
     FinancialMetrics,
     InvestmentAnalysis,
     InvestmentCriteria,
     InvestmentJudgment,
+    MarketBasis,
     Money,
+    PropertyCondition,
     PropertyListing,
 )
 
 PURCHASE_COST_RATE = 0.10
+
+MIN_PLAUSIBLE_EUR_PER_SQM = 500.0
+MAX_PLAUSIBLE_EUR_PER_SQM = 30_000.0
+
+
+def build_market_basis(
+    comps: list[PropertyListing],
+    criteria: InvestmentCriteria,
+    exclude_urls: set[str] | None = None,
+) -> MarketBasis | None:
+    """Build the local market basis from normalized comparable listings.
+
+    The overall median price per square metre plus one median per extracted
+    condition bucket form the market reference for every deal of one search.
+    Comps without a price and living area, with implausible per-square-metre
+    values, or excluded by URL (for example subject listings that also appear
+    in the comp pool) are dropped. Returns ``None`` when no usable comp
+    remains so callers can route to research instead of inventing a basis.
+    """
+
+    excluded = {str(url).rstrip("/") for url in (exclude_urls or [])}
+    overall: list[float] = []
+    buckets: dict[PropertyCondition, list[tuple[float, str]]] = {}
+    for comp in comps:
+        if comp.asking_price is None or not comp.living_area_sqm:
+            continue
+        if comp.asking_price.currency != "EUR":
+            continue
+        url = str(comp.listing_url).rstrip("/") if comp.listing_url else ""
+        if url and url in excluded:
+            continue
+        value = comp.asking_price.amount / comp.living_area_sqm
+        if not MIN_PLAUSIBLE_EUR_PER_SQM <= value <= MAX_PLAUSIBLE_EUR_PER_SQM:
+            continue
+        overall.append(value)
+        if comp.condition is not None:
+            buckets.setdefault(comp.condition, []).append((value, url))
+
+    if not overall:
+        return None
+
+    condition_averages = [
+        ConditionAverage(
+            condition=condition,
+            eur_per_sqm=round(statistics.median([value for value, _ in values]), 2),
+            comp_count=len(values),
+            source_urls=sorted({url for _, url in values}),
+        )
+        for condition, values in sorted(
+            buckets.items(), key=lambda item: item[0].name
+        )
+    ]
+    return MarketBasis(
+        city=criteria.locations[0],
+        postal_code=criteria.postal_codes[0] if criteria.postal_codes else None,
+        property_type=criteria.property_types[0],
+        overall_eur_per_sqm=round(statistics.median(overall), 2),
+        overall_comp_count=len(overall),
+        by_condition=condition_averages,
+        retrieved_at=datetime.now(UTC),
+    )
 
 
 class InvestmentReasoner(Protocol):
