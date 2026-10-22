@@ -351,6 +351,30 @@ def _price_within_tolerance(first: float, second: float) -> bool:
     return abs(first - second) <= reference * PRICE_CONFLICT_TOLERANCE
 
 
+def _matched_location(
+    combined: str, normalized: str, criteria: InvestmentCriteria
+) -> str | None:
+    """The configured target location a fetched page actually belongs to.
+
+    All explicitly configured locations are recognized, not only the first.
+    The location whose alias appears earliest in the combined text (page
+    title before content) is taken as the page's actual city, so a Meerbusch
+    listing is not automatically labeled with the primary location merely
+    because it also mentions it. ``None`` means no configured location
+    matches the page at all.
+    """
+
+    best = len(normalized)
+    matched: str | None = None
+    for location in criteria.locations:
+        for alias in city_aliases(location):
+            position = normalized.find(alias)
+            if position != -1 and position < best:
+                best = position
+                matched = location
+    return matched
+
+
 def merge_page_listing(
     page: dict[str, Any],
     url: str,
@@ -375,8 +399,8 @@ def merge_page_listing(
     combined = f"{page_title}\n{content}"
     normalized = combined.casefold()
     reasons: list[str] = []
-    aliases = city_aliases(criteria.locations[0])
-    if not any(alias in normalized for alias in aliases):
+    matched_city = _matched_location(combined, normalized, criteria)
+    if matched_city is None:
         reasons.append("no-city-match")
     if _has_rental_intent(normalized):
         reasons.append("rental-intent")
@@ -440,7 +464,7 @@ def merge_page_listing(
             property_id=uuid5(NAMESPACE_URL, url),
             source_listing_id=f"keenable-{uuid5(NAMESPACE_URL, url).hex}",
             title=page_title or url,
-            city=criteria.locations[0],
+            city=matched_city or criteria.locations[0],
             postal_code=page_postal,
             country_code="DE",
             property_type=criteria.property_types[0],

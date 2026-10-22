@@ -16,6 +16,7 @@ from propertyscout.market_search import (
     comparable_queries,
     eur_price_values,
     extract_condition,
+    merge_page_listing,
     normalize_search_result,
     search_queries,
 )
@@ -936,3 +937,47 @@ def test_discovery_budget_env_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PROPERTYSCOUT_DETAIL_FETCH_LIMIT", "11")
     with pytest.raises(ValueError):
         detail_fetch_limit_from_env()
+
+
+def duesseldorf_meerbusch_criteria() -> InvestmentCriteria:
+    return InvestmentCriteria(
+        locations=["Düsseldorf", "Meerbusch"],
+        maximum_purchase_price=Money(amount=551_001, currency="EUR"),
+        property_types=["apartment"],
+        minimum_room_count=2,
+        minimum_living_area_sqm=50,
+        strategy="buy_to_let",
+    )
+
+
+def test_merge_page_listing_recognizes_all_configured_locations() -> None:
+    criteria = duesseldorf_meerbusch_criteria()
+    page = {
+        "url": "https://www.immoportal.com/expose/111152",
+        "title": "Helle Wohnung in Meerbusch",
+        "content": "Kaufpreis 299.000 €\n62 m²\n3 Zimmer\n40668 Meerbusch",
+    }
+
+    merged, reasons = merge_page_listing(page, page["url"], criteria, None)
+    assert reasons == []
+    assert merged.city == "Meerbusch"  # actual property city preserved
+    assert merged.postal_code == "40668"
+    assert merged.living_area_sqm == 62
+    assert merged.room_count == 3
+
+    # A single-location criteria keeps rejecting Meerbusch-only pages.
+    primary_only = criteria.model_copy(update={"locations": ["Düsseldorf"]})
+    rejected, reasons = merge_page_listing(page, page["url"], primary_only, None)
+    assert rejected is None
+    assert reasons == ["no-city-match"]
+
+    # A page that describes the primary location first keeps its label.
+    primary_page = {
+        "url": "https://www.immobilo.de/immobilien/wohnung-H4VFJW",
+        "title": "Eigentumswohnung in Düsseldorf, Nähe Meerbusch",
+        "content": "Kaufpreis 299.000 €\n62 m²\n3 Zimmer\n40211 Düsseldorf",
+    }
+    labeled, reasons = merge_page_listing(primary_page, primary_page["url"], criteria, None)
+    assert reasons == []
+    assert labeled.city == "Düsseldorf"
+
