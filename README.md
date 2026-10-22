@@ -79,6 +79,24 @@ real-estate feed: snippets may be incomplete or stale, so every normalized listi
 retains its source URL and excerpt, and deals without a living area or a usable
 comparable basis route to research instead of receiving an invented valuation.
 
+Normalization is deliberately conservative. A Keenable result becomes a listing
+only when its title and snippet describe exactly one property:
+
+- Purchase intent with rental-context awareness: a sale page may mention rental
+  income ("vermietete Eigentumswohnung", "Kaltmiete"), but rental ads do not
+  pass a bare "Eigentumswohnung" wording.
+- A city match that tolerates umlaut and ASCII spelling variants
+  (Düsseldorf/Duesseldorf/Dusseldorf).
+- An EUR asking price that shares a line with its currency symbol; USD figures
+  on adjacent lines are never recorded as the EUR price.
+- No evidence of a second property. Pages with two or more distinct prices or
+  postal codes are quarantined (`multi-listing-page`) instead of stitching
+  price, area, and rooms from different units into a fabricated listing.
+
+Rejected candidates and their reasons are retained on the search service
+(`KeenableListingSearchService.last_rejections`) after each search for
+diagnostics.
+
 ## Deal pipeline dashboard
 
 Opening `/app/` also shows a persistent deal pipeline below the search form. Every
