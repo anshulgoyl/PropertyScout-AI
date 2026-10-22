@@ -115,6 +115,25 @@ const missingDataPanel = (analysis, status) =>
     ? `<div class="approval-panel diagnostic"><strong>Missing critical data</strong><p>${escapeHtml(analysis.missing_critical_data.map(humanize).join(", "))}</p></div>`
     : "";
 
+const valuationPanel = (state) => {
+  const valuation = state.analysis?.valuation;
+  if (!valuation) return "";
+  const gap = valuation.value_gap;
+  const gapText = `${gap > 0 ? "+" : ""}${(gap * 100).toFixed(1)}%`;
+  const gapClass = gap > 0.25 ? "gap-bad" : gap > 0.05 ? "gap-warn" : "gap-good";
+  const condition = valuation.condition ? humanize(valuation.condition) : "condition unknown";
+  return `
+    <div class="approval-panel valuation-panel">
+      <strong>Market valuation</strong>
+      <p>${euros(valuation.estimated_market_value)} estimated · ${escapeHtml(valuation.basis)}</p>
+      <div class="deal-metrics">
+        <span class="score-badge ${gapClass}">Price ${gapText} vs. estimate</span>
+        <span>${valuation.price_per_sqm ? `${euros(valuation.price_per_sqm)}/m²` : "—"}</span>
+        <span>${escapeHtml(condition)}</span>
+      </div>
+    </div>`;
+};
+
 const diagnosticPanel = (deal) => {
   if (!deal.diagnostic) return "";
   const lines = Object.entries(deal.diagnostic)
@@ -235,10 +254,13 @@ function dealCard(deal) {
       <span class="score-badge">Deal Score ${score == null ? "—" : `${score}/100`}</span>
       <span>${percent(yieldValue)} gross yield</span>
       <span>${cashFlow ? `${euros(cashFlow)}/mo` : "—"}</span>
+      <span>${property.build_year ? `Built ${property.build_year}` : "—"}</span>
+      <span>${property.energy_class ? `Energy ${escapeHtml(property.energy_class)}` : "—"}</span>
     </div>
     <p>${escapeHtml(summary)}</p>
     ${stageTracker(state.current_stage)}
     ${propertyMetrics(property)}
+    ${valuationPanel(state)}
     ${missingDataPanel(analysis, deal.status)}
     ${approvalPanelHTML(deal)}
     ${diagnosticPanel(deal)}

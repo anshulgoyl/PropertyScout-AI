@@ -452,6 +452,7 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert script.status_code == 200
     assert "loadDeals" in script.text
     assert "Deal Score" in script.text
+    assert "Market valuation" in script.text
     assert "schedule_exception" in script.text
 
     stylesheet = client.get("/app/styles.css")

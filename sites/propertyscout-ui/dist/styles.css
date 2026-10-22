@@ -148,6 +148,10 @@ button:disabled { opacity: .55; cursor: wait; }
 .approval-actions .neutral:hover { background: #565e5a; }
 .card-error { margin: 0; }
 .approval-panel.diagnostic { border-color: #e3c58f; }
+.valuation-panel { border-color: var(--green); }
+.score-badge.gap-good { background: var(--green); }
+.score-badge.gap-warn { background: var(--amber); }
+.score-badge.gap-bad { background: #b0524a; }
 
 @media (max-width: 880px) {
   .deal-grid { grid-template-columns: 1fr; }
