@@ -47,6 +47,28 @@ def search_query_limit_from_env() -> int:
     return _bounded_env_int("PROPERTYSCOUT_SEARCH_QUERY_LIMIT", default=3, maximum=10)
 
 
+def discovery_search_budget_from_env() -> int:
+    """Authenticated search budget for the discovery engine (CLI default: 10)."""
+
+    return _bounded_env_int("PROPERTYSCOUT_DISCOVERY_SEARCH_BUDGET", default=10, maximum=50)
+
+
+def discovery_index_fetch_budget_from_env() -> int:
+    """Keyless index-page fetches for the discovery engine (CLI default: 10)."""
+
+    return _bounded_env_int(
+        "PROPERTYSCOUT_DISCOVERY_INDEX_FETCH_BUDGET", default=10, maximum=50
+    )
+
+
+def discovery_detail_fetch_budget_from_env() -> int:
+    """Keyless individual-listing fetches for the discovery engine (CLI default: 20)."""
+
+    return _bounded_env_int(
+        "PROPERTYSCOUT_DISCOVERY_DETAIL_FETCH_BUDGET", default=20, maximum=100
+    )
+
+
 @dataclass(frozen=True)
 class ModelSettings:
     provider: str

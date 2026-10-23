@@ -153,6 +153,28 @@ button:disabled { opacity: .55; cursor: wait; }
 .score-badge.gap-warn { background: var(--amber); }
 .score-badge.gap-bad { background: #b0524a; }
 
+.discovery-card { padding: 20px; display: grid; gap: 10px; align-content: start; }
+.discovery-card .card-error { color: var(--red); font-size: 12px; }
+.diagnostic-strip { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 18px; }
+.count-chip { padding: 4px 10px; border-radius: 99px; border: 1px solid var(--line); background: var(--card); color: var(--muted); font-size: 12px; }
+.count-chip.error { border-color: var(--red); color: var(--red); }
+.discovery-reasons { margin: 0; font-size: 12px; color: var(--muted); }
+.criteria-match { color: var(--green-dark); font-weight: 700; font-size: 12px; }
+.criteria-miss { color: var(--muted); font-size: 12px; }
+.analyze-button { align-self: start; min-height: 38px; padding: 0 14px; font-size: 13px; }
+.analyze-button:disabled { opacity: .6; cursor: progress; }
+
+.status-badge { padding: 4px 10px; border-radius: 99px; font-size: 11px; font-weight: 700; }
+.status-badge.dis-complete { background: var(--green-soft); color: var(--green-dark); }
+.status-badge.dis-incomplete { background: #fff2dc; color: var(--amber); }
+.status-badge.dis-rejected { background: #f7e9e7; color: var(--red); }
+.status-badge.dis-quarantined { background: #fff2dc; color: var(--amber); }
+.status-badge.dis-index { background: #e7f0fa; color: #2b5e94; }
+.status-badge.dis-failed { background: #f7e9e7; color: var(--red); }
+.status-badge.dis-budget { background: #eceff4; color: #4a5568; }
+
+.discovery-card a { color: var(--green-dark); font-size: 12px; }
+
 @media (max-width: 880px) {
   .deal-grid { grid-template-columns: 1fr; }
 }

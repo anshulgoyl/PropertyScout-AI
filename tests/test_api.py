@@ -1,7 +1,9 @@
 from fastapi.testclient import TestClient
 
 from propertyscout.api import create_app, derive_workflow_status
+from propertyscout.discovery import DiscoveryService
 from propertyscout.market_search import FixtureListingSearchService
+from tests.test_discovery import FakeSearchClient, replay_service
 
 
 def fixture_client(tmp_path) -> TestClient:
@@ -447,10 +449,14 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert 'id="dashboard"' in page.text
     assert 'id="deal-grid"' in page.text
     assert 'id="refresh-deals"' in page.text
+    assert 'id="discovery"' in page.text
+    assert 'id="discovery-grid"' in page.text
+    assert 'id="refresh-discoveries"' in page.text
 
     script = client.get("/app/app.js")
     assert script.status_code == 200
     assert "loadDeals" in script.text
+    assert "loadDiscoveries" in script.text
     assert "Deal Score" in script.text
     assert "Market valuation" in script.text
     assert "schedule_exception" in script.text
@@ -458,3 +464,150 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     stylesheet = client.get("/app/styles.css")
     assert stylesheet.status_code == 200
     assert ".approval-panel" in stylesheet.text
+    assert ".discovery-card" in stylesheet.text
+
+
+def discovery_client(tmp_path) -> TestClient:
+    service, _fetch = replay_service(
+        search_budget=10, index_fetch_budget=10, detail_fetch_budget=70
+    )
+    return TestClient(
+        create_app(
+            tmp_path / "api.sqlite",
+            discovery_service=service,
+            comp_search_service=FixtureListingSearchService(),
+            discovery_dir=tmp_path / "discoveries",
+            use_llm=False,
+        )
+    )
+
+
+def discovery_search_body() -> dict:
+    return {
+        "city": "Düsseldorf",
+        "postal_code": "40597",
+        "minimum_rooms": 2,
+        "minimum_size_sqm": 40,
+        "maximum_price": 300000,
+        "property_type": "apartment",
+    }
+
+
+def run_discovery(client: TestClient) -> dict:
+    response = client.post("/searches", json=discovery_search_body())
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def test_discovery_search_returns_inventory_without_auto_deals(tmp_path) -> None:
+    client = discovery_client(tmp_path)
+    search = run_discovery(client)
+
+    assert search["deals"] == []  # no analysis workflows start automatically
+    discovery = search["discovery"]
+    assert discovery is not None
+    assert discovery["counts"]["complete"] >= 1
+    assert discovery["counts"]["index_page"] >= 1
+    assert discovery["search_calls"] >= 1
+    assert discovery["search_errors"] == []
+    assert discovery["csv_path"].endswith(
+        f"discovery_{discovery['search_id']}.csv"
+    )
+    assert (tmp_path / "discoveries" / f"discovery_{discovery['search_id']}.csv").exists()
+    assert client.get("/deals").json() == []
+
+
+def test_discovery_endpoint_returns_all_records_with_status_and_criteria(tmp_path) -> None:
+    client = discovery_client(tmp_path)
+    search = run_discovery(client)
+    search_id = search["discovery"]["search_id"]
+
+    history = client.get("/discoveries").json()
+    assert [item["search_id"] for item in history] == [search_id]
+
+    run = client.get(f"/discoveries/{search_id}").json()
+    assert run["search_id"] == search_id
+    assert sum(run["counts"].values()) == len(run["records"])
+    statuses = {record["status"] for record in run["records"]}
+    assert {"complete", "index_page"} <= statuses
+
+    complete = next(r for r in run["records"] if r["status"] == "complete")
+    assert complete["price_eur"] is not None
+    assert complete["area_m2"] is not None
+    assert complete["rooms"] is not None
+    assert complete["city"] == "Düsseldorf"
+    assert complete["url"].startswith("https://")
+    assert complete["matches_criteria"] is True
+
+    index = next(r for r in run["records"] if r["status"] == "index_page")
+    assert "index-page" in index["reasons"]
+    assert index["matches_criteria"] is False
+
+
+def test_selected_complete_listing_starts_analysis_with_verified_comps(tmp_path) -> None:
+    client = discovery_client(tmp_path)
+    search = run_discovery(client)
+    search_id = search["discovery"]["search_id"]
+
+    run = client.get(f"/discoveries/{search_id}").json()
+    complete = next(r for r in run["records"] if r["status"] == "complete")
+    index = next(r for r in run["records"] if r["status"] == "index_page")
+
+    blocked = client.post(
+        f"/discoveries/{search_id}/deals", json={"url": index["url"]}
+    )
+    assert blocked.status_code == 409
+
+    unknown = client.post(
+        f"/discoveries/{search_id}/deals", json={"url": "https://unknown.example/x"}
+    )
+    assert unknown.status_code == 404
+
+    response = client.post(f"/discoveries/{search_id}/deals", json={"url": complete["url"]})
+    assert response.status_code == 201, response.text
+    deal = response.json()
+    assert deal["state"]["property"]["listing_url"] == complete["url"]
+    assert deal["state"]["market_basis"]  # verified comps from the injected service
+
+
+def test_discovery_history_survives_restart(tmp_path) -> None:
+    first = discovery_client(tmp_path)
+    search = run_discovery(first)
+    search_id = search["discovery"]["search_id"]
+
+    second = discovery_client(tmp_path)  # fresh app, same discovery_dir
+    history = second.get("/discoveries").json()
+    assert [item["search_id"] for item in history] == [search_id]
+    run = second.get(f"/discoveries/{search_id}").json()
+    assert len(run["records"]) == len(
+        (tmp_path / "discoveries" / f"discovery_{search_id}.csv").read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ) - 1
+
+
+def test_discovery_search_failure_returns_502(tmp_path) -> None:
+    service = DiscoveryService(
+        search_client=FakeSearchClient(results=[], fail=True),
+        fetch_client=None,
+        search_budget=3,
+    )
+    app = create_app(
+        tmp_path / "api.sqlite",
+        discovery_service=service,
+        discovery_dir=tmp_path / "discoveries",
+        use_llm=False,
+    )
+    client = TestClient(app)
+    response = client.post("/searches", json=discovery_search_body())
+    assert response.status_code == 502
+    assert "RuntimeError" in response.json()["detail"]
+    assert client.get("/discoveries").json() == []
+
+
+# __DISCOVERY_TESTS3__
+
+
+
+
+

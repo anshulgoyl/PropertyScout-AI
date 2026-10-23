@@ -395,6 +395,183 @@ async function loadDeals() {
 refreshButton.addEventListener("click", loadDeals);
 loadDeals();
 
+const discoverySection = document.querySelector("#discovery");
+const discoveryGrid = document.querySelector("#discovery-grid");
+const discoveryCount = document.querySelector("#discovery-count");
+const discoveryDiagnostics = document.querySelector("#discovery-diagnostics");
+const discoveryEmpty = document.querySelector("#discovery-empty");
+const refreshDiscoveriesButton = document.querySelector("#refresh-discoveries");
+
+const DISCOVERY_STATUS_META = {
+  complete: { label: "Validated", cls: "dis-complete" },
+  incomplete: { label: "Incomplete", cls: "dis-incomplete" },
+  rejected: { label: "Rejected", cls: "dis-rejected" },
+  quarantined: { label: "Quarantined", cls: "dis-quarantined" },
+  index_page: { label: "Index page", cls: "dis-index" },
+  fetch_failed: { label: "Fetch failed", cls: "dis-failed" },
+  budget_exhausted: { label: "Budget exhausted", cls: "dis-budget" },
+};
+
+let currentSearchId = null;
+
+const eurosPlain = (value) =>
+  value == null ? "—" : `EUR ${value.toLocaleString("en-US")}`;
+
+function discoveryStatusBadge(status) {
+  const meta = DISCOVERY_STATUS_META[status] || {
+    label: humanize(status),
+    cls: "dis-budget",
+  };
+  return `<span class="status-badge ${meta.cls}">${meta.label}</span>`;
+}
+
+function discoveryReasonLine(record) {
+  const parts = [];
+  if (record.reasons?.length) {
+    parts.push(`Reasons: ${record.reasons.map(humanize).join(", ")}`);
+  }
+  if (record.missing?.length) {
+    parts.push(`Missing: ${record.missing.map(humanize).join(", ")}`);
+  }
+  if (record.possible_duplicates?.length) {
+    parts.push(`Possible duplicate of ${record.possible_duplicates.length} listing(s)`);
+  }
+  return parts.length
+    ? `<p class="discovery-reasons">${escapeHtml(parts.join(" · "))}</p>`
+    : "";
+}
+
+function discoveryCard(record) {
+  const card = document.createElement("article");
+  card.className = "result-card discovery-card";
+  card.dataset.url = record.url;
+  const selectable = record.status === "complete";
+  const criteria = record.matches_criteria
+    ? `<span class="criteria-match">Matches criteria ✓</span>`
+    : `<span class="criteria-miss">Outside criteria</span>`;
+  card.innerHTML = `
+    <div class="result-meta">
+      ${discoveryStatusBadge(record.status)}
+      ${criteria}
+      <span>${escapeHtml(record.portal)}</span>
+    </div>
+    <h3>${escapeHtml(record.title || record.url)}</h3>
+    <div class="metric">
+      <span>${record.rooms ?? "—"} rooms · ${record.area_m2 ?? "—"} m² · ${escapeHtml(record.city || "—")}${record.postal_code ? ` · ${record.postal_code}` : ""}</span>
+      <span>${eurosPlain(record.price_eur)}</span>
+    </div>
+    ${discoveryReasonLine(record)}
+    <div class="result-meta">
+      <a href="${escapeHtml(record.url)}" target="_blank" rel="noopener">Open source listing ↗</a>
+    </div>
+    ${selectable ? `<button type="button" class="ghost-button analyze-button">Select for analysis</button>` : ""}
+    <p class="card-error" role="alert" hidden></p>`;
+  const button = card.querySelector(".analyze-button");
+  if (button) {
+    button.addEventListener("click", () => {
+      startDiscoveryDeal(card, record.url);
+    });
+  }
+  return card;
+}
+
+function renderDiscovery(run) {
+  currentSearchId = run.search_id;
+  const counts = run.counts || {};
+  const total = Object.values(counts).reduce((sum, value) => sum + value, 0);
+  const diagnostics = [
+    `${total} discovered item(s)`,
+    `${run.search_calls} search call(s)`,
+    `${run.index_fetches} index fetch(es)`,
+    `${run.detail_fetches} detail fetch(es)`,
+  ];
+  if (run.cross_query_duplicates) {
+    diagnostics.push(`${run.cross_query_duplicates} duplicate URL(s) skipped`);
+  }
+  discoveryCount.textContent = diagnostics.join(" · ");
+  const chips = Object.entries(counts)
+    .map(([status, count]) => {
+      const meta = DISCOVERY_STATUS_META[status] || { label: humanize(status) };
+      return `<span class="count-chip">${meta.label}: ${count}</span>`;
+    })
+    .join("");
+  const errorChips = (run.search_errors || [])
+    .map((error) => `<span class="count-chip error">Search error: ${escapeHtml(error)}</span>`)
+    .join("");
+  discoveryDiagnostics.innerHTML = chips + errorChips;
+  if (total === 0) {
+    discoveryGrid.replaceChildren();
+    discoveryEmpty.textContent = "No discoveries recorded for this search yet.";
+    discoveryEmpty.hidden = false;
+    discoverySection.hidden = false;
+    return;
+  }
+  discoveryEmpty.hidden = true;
+  discoveryGrid.replaceChildren(...run.records.map(discoveryCard));
+  discoverySection.hidden = false;
+}
+
+async function loadDiscoveries(searchId) {
+  try {
+    const historyResponse = await fetch("/discoveries");
+    if (!historyResponse.ok) throw new Error("Could not load discovery history.");
+    const history = await historyResponse.json();
+    if (history.length === 0) {
+      discoveryGrid.replaceChildren();
+      discoveryDiagnostics.replaceChildren();
+      discoveryEmpty.textContent =
+        "No discovery search has run yet. Start a property search above to populate the inventory.";
+      discoveryEmpty.hidden = false;
+      discoverySection.hidden = false;
+      return;
+    }
+    const target = searchId || currentSearchId;
+    const known = history.some((item) => item.search_id === target);
+    const runId = known ? target : history[0].search_id;
+    const runResponse = await fetch(`/discoveries/${runId}`);
+    if (!runResponse.ok) throw new Error("Could not load the discovery run.");
+    renderDiscovery(await runResponse.json());
+  } catch (error) {
+    discoveryGrid.replaceChildren();
+    discoveryEmpty.textContent = error.message;
+    discoveryEmpty.hidden = false;
+    discoverySection.hidden = false;
+  }
+}
+
+async function startDiscoveryDeal(card, url) {
+  const cardError = card.querySelector(".card-error");
+  const button = card.querySelector(".analyze-button");
+  cardError.hidden = true;
+  if (button) button.disabled = true;
+  const send = (body) =>
+    fetch(`/discoveries/${currentSearchId}/deals`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  try {
+    let response = await send({ url });
+    if (response.status === 422) {
+      response = await send({ url, criteria: requestFromForm() });
+    }
+    if (!response.ok) throw new Error(await readError(response));
+    cardError.textContent = "Analysis workflow started — see it in your deals below.";
+    cardError.hidden = false;
+    await loadDeals();
+  } catch (error) {
+    cardError.textContent = error.message;
+    cardError.hidden = false;
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+refreshDiscoveriesButton.addEventListener("click", () => loadDiscoveries());
+loadDiscoveries();
+
+
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   errorBox.hidden = true;
@@ -411,6 +588,12 @@ form.addEventListener("submit", async (event) => {
       throw new Error(body.detail?.[0]?.msg || body.detail || "The search could not be started.");
     }
     if (body.deals.length === 0) {
+      if (body.discovery) {
+        resultsSection.hidden = true;
+        await loadDiscoveries(body.discovery.search_id);
+        discoverySection.scrollIntoView({ behavior: "smooth", block: "start" });
+        return;
+      }
       resultCount.textContent = "0 listings reviewed";
       const empty = document.createElement("article");
       empty.className = "result-card empty-result";

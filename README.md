@@ -146,6 +146,35 @@ The CSV goes to stdout unless `--output` is given; a run summary is printed to
 stderr. Offline behavior is verified by replaying the captured pages in
 `tests/fixtures/` (`tests/test_discovery.py`); no live API calls happen in tests.
 
+## Discovery engine in the local UI
+
+`POST /searches` runs the same `DiscoveryService` used by the standalone CLI
+(authenticated Keenable search, keyless index and listing fetches,
+child-listing extraction, validation, and deduplication) and stores the full
+inventory instead of starting analysis workflows automatically. Every run gets
+a unique `search_id` and its own CSV under `data/discoveries/` — previous
+inventories are never overwritten.
+
+- `GET /discoveries` lists past discovery runs (search IDs, counts, budget
+  usage, search errors); `GET /discoveries/{search_id}` returns every record
+  with price, area, rooms, city, source URL, validation status,
+  `matches_criteria`, rejection reasons, and missing attributes.
+- `POST /discoveries/{search_id}/deals` starts the existing analysis workflow
+  for **one selected complete listing**. Comparable research still runs at
+  that moment through the existing `search_comps` service and feeds the same
+  `build_market_basis` contract; a failed comps query starts the deal without
+  a basis so the analyst routes it to research.
+- Budgets match the standalone CLI and are configurable via environment
+  variables: `PROPERTYSCOUT_DISCOVERY_SEARCH_BUDGET` (10),
+  `PROPERTYSCOUT_DISCOVERY_INDEX_FETCH_BUDGET` (10), and
+  `PROPERTYSCOUT_DISCOVERY_DETAIL_FETCH_BUDGET` (20).
+
+The UI at `http://127.0.0.1:8000/app/` shows the discovery inventory with
+per-status counts and search diagnostics; validated listings carry a
+"Select for analysis" button that starts the durable deal workflow. Legacy
+fixture-based usage (`listing_search_service=`) keeps its previous
+auto-create-deal behavior for offline tests and demos.
+
 ## Deal pipeline dashboard
 
 Opening `/app/` also shows a persistent deal pipeline below the search form. Every
