@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from propertyscout.discovery import (
     DiscoveryError,
     DiscoveryService,
     DiscoveryStatus,
+    _process_index_page,
     build_criteria,
     build_parser,
     csv_text,
@@ -23,10 +25,10 @@ from propertyscout.discovery import (
     run_cli,
     trim_main_listing,
 )
+from propertyscout.market_search import search_queries
 from propertyscout.schemas import InvestmentCriteria, Money
 
 FIXTURES = Path(__file__).parent / "fixtures"
-
 
 def fixture(name: str) -> str:
     return (FIXTURES / name).read_text(encoding="utf-8")
@@ -216,7 +218,7 @@ def test_detail_fixtures_parse_into_complete_records() -> None:
 def test_replay_runs_all_stages_within_budgets() -> None:
     service, fetch = replay_service(detail_fetch_budget=70)
     run = service.run(benrath_criteria())
-    assert run.search_calls == 3  # primary + two fallback variants
+    assert run.search_calls == min(service._search_budget, len(search_queries(benrath_criteria())))
     assert run.queries_run[0].startswith("Eigentumswohnung Düsseldorf kaufen")
     assert run.index_fetches == 4  # one per captured index page
     assert run.detail_fetches == 66  # every unique child URL fetched once
@@ -311,7 +313,8 @@ def test_search_budget_is_enforced_without_early_stopping() -> None:
         search_client=search, fetch_client=fetch, search_budget=10
     )
     service.run(benrath_criteria())
-    assert search.calls == 2 + 3  # all configured variants run despite earlier results
+    #assert search.calls == 2 + 3  # all configured variants run despite earlier results
+    assert search.calls == 2 + min(10, len(search_queries(benrath_criteria())))
 
 
 def test_search_errors_are_recorded_not_retried() -> None:
@@ -319,8 +322,10 @@ def test_search_errors_are_recorded_not_retried() -> None:
     fetch = FakeFetchClient()
     service = DiscoveryService(search_client=search, fetch_client=fetch)
     run = service.run(benrath_criteria())
-    assert search.calls == 3  # one attempt per query, no retries
-    assert len(run.search_errors) == 3
+    # assert search.calls == 3  # one attempt per query, no retries
+    assert search.calls == min(service._search_budget, len(search_queries(benrath_criteria())))
+    # assert len(run.search_errors) == 3
+    assert len(run.search_errors) == search.calls
     assert run.records == []
 
 
@@ -345,7 +350,14 @@ def test_same_url_fetched_once_across_queries() -> None:
         search_client=search, fetch_client=fetch, detail_fetch_budget=70
     )
     run = service.run(benrath_criteria())
-    assert run.cross_query_duplicates == 20  # 8 duplicated results per later query
+    #assert run.cross_query_duplicates == 20  # 8 duplicated results per later query
+    expected_duplicates = (
+    len(INDEX_PAGES) * 2 * run.search_calls
+    - len(INDEX_PAGES)
+    )
+
+    assert run.cross_query_duplicates == expected_duplicates
+
     assert fetch.call_count == 66 + 4  # no URL fetched twice
 
 
@@ -514,3 +526,69 @@ def test_build_parser_defaults_to_required_budgets() -> None:
     criteria = build_criteria(args)
     assert criteria.locations == ["Köln"]
     assert criteria.maximum_purchase_price.amount == 500000
+
+
+def test_wuppertal_single_property_not_index_page() -> None:
+    """A broker's legal postcode must not turn one property into an index."""
+
+    fixture = FIXTURES / "immobiliya_wuppertal.json"
+    page = json.loads(fixture.read_text(encoding="utf-8"))
+    url = page["url"]
+
+    criteria = benrath_criteria().model_copy(
+        update={
+            "locations": ["Wuppertal"],
+            "postal_codes": [],
+            "minimum_room_count": 2,
+            "minimum_living_area_sqm": 50,
+        }
+    )
+
+    children = []
+    child_seen = set()
+
+    records = _process_index_page(
+        page, url, criteria, children, child_seen
+    )
+
+    assert len(records) == 1
+    assert records[0].status is DiscoveryStatus.COMPLETE
+    assert records[0].price_eur == 20_000
+    assert records[0].area_m2 == 43
+    assert records[0].rooms == 1
+    assert records[0].postal_code == "42107"
+    assert records[0].matches_criteria is False
+    assert children == []
+
+
+
+def test_genuine_multi_listing_remains_index_page() -> None:
+    """Multiple property links must remain an index page."""
+
+    url = "https://www.immobilo.de/kaufen/wohnung/duesseldorf-benrath"
+    content = (
+        FIXTURES / "index_immobilo_benrath.md"
+    ).read_text(encoding="utf-8")
+
+    page = {
+        "url": url,
+        "title": "Wohnungen kaufen Düsseldorf-Benrath",
+        "content": content,
+    }
+
+    children = []
+    child_seen = set()
+
+    records = _process_index_page(
+        page,
+        url,
+        benrath_criteria(),
+        children,
+        child_seen,
+    )
+
+    assert len(records) == 1
+    assert records[0].status is DiscoveryStatus.INDEX_PAGE
+    assert len(children) > 1
+    assert records[0].child_count == len(children)
+

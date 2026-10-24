@@ -44,6 +44,7 @@ from propertyscout.market_search import (
     _FEATURE_TERMS,
     _POSTAL_CODE,
     _ROOMS,
+    _property_content_only,
     canonical_url,
     eur_price_values,
     extract_condition,
@@ -250,14 +251,23 @@ def trim_main_listing(content: str) -> str:
     return content[:cut] if cut < len(content) else content
 
 
+
 def page_signals(text: str) -> tuple[bool, list[float], list[str]]:
     """Multi-listing signal plus distinct prices and postal codes."""
 
-    postal_codes = sorted(set(_POSTAL_CODE.findall(text)))
+    property_text = _property_content_only(text)
+
+    postal_codes = sorted(set(_POSTAL_CODE.findall(property_text)))
     prices = sorted(
-        {value for value in eur_price_values(text) if value > _PLAUSIBLE_PRICE}
+        {
+            value
+            for value in eur_price_values(property_text)
+            if value > _PLAUSIBLE_PRICE
+        }
     )
+
     return len(postal_codes) > 1 or len(prices) > 1, prices, postal_codes
+
 
 
 def _default_fetch_client() -> KeenableFetch:
@@ -558,6 +568,27 @@ class DiscoveryService:
         return [record]
 
 
+def has_single_property_evidence(text: str) -> bool:
+    """Recognize an explicitly labelled individual property record."""
+
+    normalized = text.casefold()
+
+    price_label = any(
+        label in normalized
+        for label in ("purchase price", "kaufpreis")
+    )
+    area_label = any(
+        label in normalized
+        for label in ("living space", "wohnfläche", "wohnflaeche")
+    )
+    room_label = any(
+        label in normalized
+        for label in ("rooms", "zimmer")
+    )
+
+    return price_label and area_label and room_label
+
+
 def _process_index_page(
     page: dict[str, Any],
     url: str,
@@ -577,7 +608,8 @@ def _process_index_page(
     content = str(page.get("content") or "")
     links = extract_listing_links(content, str(page.get("url") or url))
     multi, _, _ = page_signals(f"{title}\n{content}")
-    if multi or len(links) >= 2:
+    single_property = has_single_property_evidence(f"{title}\n{content}")
+    if len(links) >= 2 or (multi and not single_property):
         parent_title = title or detect_portal(url)
         for link in links:
             key = canonical_url(link)

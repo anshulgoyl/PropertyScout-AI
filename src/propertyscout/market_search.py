@@ -241,18 +241,46 @@ def eur_price_values(text: str) -> list[float]:
             values.append(_german_number(match.group("value")))
     return values
 
+def _property_content_only(text: str) -> str:
+    """Exclude legal notices from property-identity checks."""
 
-def _is_multi_listing_page(combined: str, price_values: list[float]) -> bool:
+    markers = (
+        "commission, right of withdrawal and notices",
+        "cancellation policy",
+        "widerrufsbelehrung",
+    )
+
+    normalized = text.casefold()
+    positions = [
+        normalized.find(marker)
+        for marker in markers
+        if marker in normalized
+    ]
+
+    if positions:
+        return text[:min(positions)]
+
+    return text
+
     """Detect aggregator pages that mix several properties in one snippet.
-
     A trustworthy snippet describes exactly one identifiable property: one
     distinct purchase price and at most one postal code. Two or more of either
     mean the extracted attributes could come from different units, so the page
     is quarantined instead of fabricating a composite listing.
     """
 
-    postal_codes = set(_POSTAL_CODE.findall(combined))
-    purchase_prices = {value for value in price_values if value > 10_000}
+def _is_multi_listing_page(combined: str, price_values: list[float]) -> bool:
+    """Detect multiple properties while excluding legal notices."""
+
+    property_text = _property_content_only(combined)
+
+    postal_codes = set(_POSTAL_CODE.findall(property_text))
+    purchase_prices = {
+        value
+        for value in eur_price_values(property_text)
+        if value > 10_000
+    }
+
     return len(postal_codes) > 1 or len(purchase_prices) > 1
 
 
@@ -402,7 +430,7 @@ def merge_page_listing(
     matched_city = _matched_location(combined, normalized, criteria)
     if matched_city is None:
         reasons.append("no-city-match")
-    if _has_rental_intent(normalized):
+    if _has_rental_intent(normalized) and not _has_sale_intent(normalized):
         reasons.append("rental-intent")
     price_values = eur_price_values(combined)
     purchase_prices = sorted({value for value in price_values if value > 10_000})
@@ -493,23 +521,41 @@ def merge_page_listing(
 
 
 def search_queries(criteria: InvestmentCriteria) -> list[str]:
-    """Primary search query plus bounded fallback variants, deduplicated."""
+    """Generate broad and targeted property purchase queries."""
 
     primary = build_property_query(criteria)
     property_type = criteria.property_types[0]
     location = criteria.locations[0]
-    search_type = _PROPERTY_TERMS.get(property_type.casefold(), property_type)
+    search_type = _PROPERTY_TERMS.get(
+        property_type.casefold(), property_type
+    )
     budget = f"{criteria.maximum_purchase_price.amount:g}"
+
     variants = [
         primary,
         f"{search_type} {location} kaufen bis {budget} EUR",
         f"{search_type} kaufen {location}",
+        f"Wohnung kaufen {location}",
+        f"Eigentumswohnung {location} kaufen",
+        f"Immobilien kaufen {location} Wohnung",
+        f"{search_type} {location} provisionsfrei",
+        f"{search_type} {location} Kapitalanlage",
+        f"{search_type} {location} von privat",
+        f"{search_type} {location} Neubau",
+        f"{search_type} {location} Bestandswohnung",
+        f"{search_type} {location} 2 Zimmer kaufen",
+        f"{search_type} {location} 3 Zimmer kaufen",
+        f"{search_type} {location} Balkon kaufen",
+        f"{search_type} {location} vermietet kaufen",
+            # Portal-specific property searches
+        f"site:immobilienscout24.de {search_type} kaufen {location}",
+        f"site:immowelt.de {search_type} kaufen {location}",
+        f"site:kleinanzeigen.de {search_type} kaufen {location}",
+        f"site:immobilo.de {search_type} kaufen {location}",
+        f"site:yourimmo.de {search_type} kaufen {location}",
     ]
-    queries: list[str] = []
-    for query in variants:
-        if query and query not in queries:
-            queries.append(query)
-    return queries
+
+    return list(dict.fromkeys(q for q in variants if q))
 
 
 class ListingSearchService(Protocol):

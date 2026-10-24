@@ -590,19 +590,38 @@ def test_captured_duesseldorf_snapshots_replay_with_quarantine() -> None:
     assert all(site_scoped.last_rejections)
 
 
-def test_search_queries_primary_then_fallback_variants() -> None:
-    queries = search_queries(duesseldorf_criteria())
 
-    assert queries == [
-        "Eigentumswohnung Düsseldorf kaufen bis 551001 EUR 2 Zimmer 50 m²",
-        "Eigentumswohnung Düsseldorf kaufen bis 551001 EUR",
-        "Eigentumswohnung kaufen Düsseldorf",
-    ]
+@pytest.mark.parametrize(
+    "city",
+    ["Düsseldorf", "Cologne", "Wuppertal", "Berlin", "München"],
+)
+def test_search_queries_primary_then_fallback_variants(city: str) -> None:
+    criteria = duesseldorf_criteria().model_copy(
+        update={"locations": [city]}
+    )
 
-    cologne = default_criteria()
-    cologne_queries = search_queries(cologne)
-    assert cologne_queries[0] == build_property_query(cologne)
-    assert len(cologne_queries) == 3
+    queries = search_queries(criteria)
+
+    # Primary query always comes first.
+    assert queries[0] == build_property_query(criteria)
+
+    # Generate multiple search variations.
+    assert len(queries) > 3
+
+    # No duplicate queries.
+    assert len(queries) == len(set(queries))
+
+    # Search queries must include the requested city.
+ 
+    aliases = city_aliases(city)
+    assert all(
+    any(alias.casefold() in query.casefold() for alias in aliases)
+    for query in queries
+)
+
+    # Original broad fallback must remain available.
+    assert f"Eigentumswohnung kaufen {city}" in queries
+
 
 
 def test_canonical_url_strips_tracking_and_keeps_identifiers() -> None:
