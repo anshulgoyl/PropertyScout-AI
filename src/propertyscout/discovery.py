@@ -31,7 +31,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import unquote, urljoin, urlsplit
 from uuid import NAMESPACE_URL, uuid5
 
 from langchain_keenable import KeenableFetch, KeenableSearch
@@ -46,11 +46,13 @@ from propertyscout.market_search import (
     _ROOMS,
     _property_content_only,
     canonical_url,
+    city_aliases,
     eur_price_values,
     extract_condition,
     is_complete_listing,
     merge_page_listing,
     normalize_search_result,
+    purchase_price_value,
     rejection_reasons,
     search_queries,
 )
@@ -342,7 +344,7 @@ def _parse_child_page(
     reasons = rejection_reasons(pseudo, criteria)
     if reasons:
         return None, reasons, []
-    multi, prices, postals = page_signals(main)
+    multi, _, postals = page_signals(main)
     if multi:
         return None, ["multi-listing-page"], []
     normalized = main.casefold()
@@ -355,8 +357,15 @@ def _parse_child_page(
         source_name="Keenable keyless page fetch",
         url=url,
         retrieved_at=datetime.now(UTC),
-        excerpt=content[:1_000],
+        # Keep enough of the selected listing page for Agent 3 to extract its
+        # public contact details later without fetching another source.
+        excerpt=content[:12_000],
     )
+    asking_price = purchase_price_value(main)
+    if asking_price is None:
+        # Keep a nearby service charge, commission, or rent from becoming the
+        # asking price if a page structure changes after initial validation.
+        return None, ["ambiguous-price"], []
     listing = PropertyListing(
         property_id=uuid5(NAMESPACE_URL, url),
         source_listing_id=f"keenable-{uuid5(NAMESPACE_URL, url).hex}",
@@ -365,7 +374,7 @@ def _parse_child_page(
         postal_code=postals[0] if postals else None,
         country_code="DE",
         property_type=criteria.property_types[0],
-        asking_price=Money(amount=prices[0], currency="EUR"),
+        asking_price=Money(amount=asking_price, currency="EUR"),
         living_area_sqm=_decimal(area_match.group("value")) if area_match else None,
         room_count=_decimal(rooms_match.group("value")) if rooms_match else None,
         build_year=int(build_year_match.group("value")) if build_year_match else None,
@@ -387,6 +396,35 @@ def _parse_child_page(
 
 def _decimal(value: str) -> float:
     return float(value.replace(",", "."))
+
+
+def _child_listing_priority(url: str, criteria: InvestmentCriteria) -> int:
+    """Rank likely matching detail URLs ahead of generic broad-search links.
+
+    This is only a fetch-order heuristic: each fetched page still passes the
+    normal content and criteria checks before it can be validated.
+    """
+
+    text = unquote(url).casefold().replace("_", "-")
+    score = 0
+    if any(alias in text for alias in city_aliases(criteria.locations[0])):
+        score += 5
+    if criteria.property_types[0] == "apartment" and any(
+        term in text for term in ("wohnung", "apartment", "penthouse")
+    ):
+        score += 4
+    if criteria.minimum_room_count is not None:
+        rooms = criteria.minimum_room_count
+        room_markers = (
+            f"{rooms:g}-zimmer",
+            f"{rooms:g}-zi",
+            f"{rooms:g}zimmer",
+        )
+        if any(marker in text for marker in room_markers):
+            score += 6
+    if any(term in text for term in ("kaufen", "eigentumswohnung", "provisionsfrei")):
+        score += 2
+    return score
 
 
 class DiscoveryService:
@@ -455,7 +493,14 @@ class DiscoveryService:
                 )
 
         # Stage 2: keyless fetches of individual listings from index pages.
-        for child_url, parent_title in children:
+        # Broad city searches can produce hundreds of child URLs. Prioritise
+        # the ones whose URL slug most clearly matches the brief before the
+        # finite detail-fetch budget is exhausted.
+        for child_url, parent_title in sorted(
+            children,
+            key=lambda item: _child_listing_priority(item[0], criteria),
+            reverse=True,
+        ):
             records.extend(
                 self._fetch_detail(
                     parent_title, child_url, criteria, None, run, fetched_urls

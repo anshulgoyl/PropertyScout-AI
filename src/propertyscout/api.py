@@ -6,9 +6,9 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Response, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -16,7 +16,11 @@ from langchain_keenable import KeenableFetch, KeenableSearch
 from langgraph.types import Command
 from pydantic import BaseModel, Field, SecretStr
 
-from propertyscout.analyst import build_market_basis, create_nebius_reasoner
+from propertyscout.analyst import (
+    build_market_basis,
+    create_nebius_reasoner,
+    select_comparable_listings,
+)
 from propertyscout.bootstrap import initial_state, initial_state_for_listing
 from propertyscout.config import (
     detail_fetch_limit_from_env,
@@ -39,8 +43,20 @@ from propertyscout.market_search import (
     canonical_url,
 )
 from propertyscout.meeting_intelligence import create_nebius_meeting_brief_service
-from propertyscout.persistence import list_sqlite_thread_ids, open_sqlite_graph
-from propertyscout.schemas import InvestmentCriteria, Money
+from propertyscout.persistence import (
+    delete_sqlite_thread,
+    list_sqlite_thread_ids,
+    open_sqlite_graph,
+)
+from propertyscout.postcode_proximity import PostcodeCoordinateIndex
+from propertyscout.schemas import (
+    ComparableSelection,
+    DiscoverySelectionContext,
+    InvestmentCriteria,
+    Money,
+    PropertyCondition,
+    PropertyListing,
+)
 
 
 class StartDealRequest(BaseModel):
@@ -152,6 +168,8 @@ class StartDiscoveryDealRequest(BaseModel):
 
 MIN_COMP_COUNT = 8
 MAX_COMP_QUERIES = 3
+NEARBY_POSTCODE_LIMIT = 5
+NEARBY_POSTCODE_RADIUS_KM = 25.0
 
 
 def _config(thread_id: str) -> dict:
@@ -164,7 +182,10 @@ TERMINAL_OUTCOME_STATUS: dict[str, str] = {
     "analysis_rejected": "rejected",
     "shortlist_rejected": "rejected",
     "outreach_rejected": "rejected",
-    "contact_not_found": "rejected",
+    # Contact research may fail without changing the investment decision.
+    # Keep the deal actionable in the Contact tab rather than rejecting it.
+    "contact_not_found": "needs_research",
+    "contact_method_required": "needs_research",
     "broker_declined": "rejected",
     "schedule_rejected": "rejected",
     "outreach_revision_requested": "rejected",
@@ -261,6 +282,7 @@ def create_app(
     discovery_service: DiscoveryService | None = None,
     comp_search_service: ListingSearchService | None = None,
     discovery_dir: str | Path = "data/discoveries",
+    postcode_index: PostcodeCoordinateIndex | None = None,
     use_llm: bool | None = None,
 ) -> FastAPI:
     database_path = Path(database_path)
@@ -270,6 +292,17 @@ def create_app(
         detail_fetch_limit=detail_fetch_limit_from_env(),
         search_query_limit=search_query_limit_from_env(),
     )
+    if postcode_index is not None:
+        resolved_postcode_index = postcode_index
+    else:
+        coordinate_path = (
+            Path(__file__).resolve().parents[2] / "data" / "postcode_coordinates.csv"
+        )
+        resolved_postcode_index = (
+            PostcodeCoordinateIndex.from_csv(coordinate_path)
+            if coordinate_path.exists()
+            else PostcodeCoordinateIndex.empty()
+        )
     discovery_runs: dict[str, dict[str, Any]] = {}
 
     def _default_discovery_service() -> DiscoveryService:
@@ -313,6 +346,55 @@ def create_app(
             possible_duplicates=list(record.possible_duplicates),
             merged_from=list(record.merged_from),
         )
+
+    def _rehydrate_listing(
+        record: DiscoveryRecord, criteria: InvestmentCriteria
+    ) -> DiscoveryRecord:
+        """Rebuild a complete listing from a persisted discovery CSV row.
+
+        CSV history intentionally stores flat, reviewable columns rather than
+        the nested domain object. A complete row has every field required to
+        reconstruct the original listing using the search criteria that
+        produced it.
+        """
+
+        if record.listing is not None or record.status.value != "complete":
+            return record
+        if not all(
+            [
+                record.url,
+                record.title,
+                record.city,
+                record.price_eur is not None,
+                record.area_m2 is not None,
+                record.rooms is not None,
+            ]
+        ):
+            return record
+        try:
+            condition = (
+                PropertyCondition(record.condition) if record.condition else None
+            )
+            listing = PropertyListing(
+                property_id=uuid5(NAMESPACE_URL, canonical_url(record.url)),
+                source_listing_id=(
+                    f"keenable-{uuid5(NAMESPACE_URL, canonical_url(record.url)).hex}"
+                ),
+                title=record.title,
+                city=record.city,
+                postal_code=record.postal_code,
+                country_code="DE",
+                property_type=criteria.property_types[0],
+                asking_price=Money(amount=record.price_eur, currency="EUR"),
+                living_area_sqm=record.area_m2,
+                room_count=record.rooms,
+                condition=condition,
+                listing_url=record.url,
+                missing_fields=record.missing,
+            )
+        except (TypeError, ValueError):
+            return record
+        return record.model_copy(update={"listing": listing})
 
     def _run_summary(search_id: str, entry: dict[str, Any]) -> DiscoveryRunSummary:
         diagnostics = entry["diagnostics"]
@@ -513,6 +595,14 @@ def create_app(
         with open_sqlite_graph(database_path, **graph_options) as graph:
             return _deal_view(graph, thread_id)
 
+    @application.delete("/deals/{thread_id}", status_code=status.HTTP_204_NO_CONTENT)
+    def delete_deal(thread_id: str) -> Response:
+        """Permanently remove one local deal from the pipeline."""
+
+        if not delete_sqlite_thread(database_path, thread_id):
+            raise HTTPException(status_code=404, detail="Deal thread not found")
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
     @application.post("/deals/{thread_id}/resume", response_model=DealView)
     def resume_deal(thread_id: str, request: ResumeDealRequest) -> DealView:
         with open_sqlite_graph(database_path, **graph_options) as graph:
@@ -541,6 +631,25 @@ def create_app(
             records=[_record_view(record) for record in entry["records"]],
         )
 
+    @application.delete("/discoveries/{search_id}", status_code=status.HTTP_204_NO_CONTENT)
+    def clear_discovery(search_id: str) -> Response:
+        """Remove one saved discovery inventory without changing any deals."""
+
+        entry = _load_run(search_id)
+        path = entry.get("csv_path")
+        if path:
+            csv_path = Path(path).resolve()
+            if csv_path.parent != discovery_dir.resolve():
+                raise HTTPException(status_code=400, detail="Invalid discovery inventory path")
+            try:
+                csv_path.unlink(missing_ok=True)
+            except OSError as exc:
+                raise HTTPException(
+                    status_code=500, detail="Could not clear discovery inventory"
+                ) from exc
+        discovery_runs.pop(search_id, None)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
     @application.post(
         "/discoveries/{search_id}/deals",
         response_model=DealView,
@@ -552,7 +661,7 @@ def create_app(
         entry = _load_run(search_id)
         criteria = entry.get("criteria")
         if criteria is None and request.criteria is not None:
-            criteria = request.criteria()
+            criteria = request.criteria.criteria()
         if criteria is None:
             raise HTTPException(
                 status_code=422,
@@ -561,6 +670,9 @@ def create_app(
                     "pass the original search criteria to start analysis"
                 ),
             )
+        entry["records"] = [
+            _rehydrate_listing(candidate, criteria) for candidate in entry["records"]
+        ]
         target = canonical_url(request.url.strip())
         record = next(
             (
@@ -581,15 +693,121 @@ def create_app(
                 detail="Only complete listings can be selected for analysis",
             )
 
-        # Comparable research stays bounded and per-selection: a failed comps
-        # query is not fatal — the deal then starts without a basis and the
-        # analyst routes it to research instead of inventing market numbers.
-        try:
-            comps = selected_comp_search.search_comps(
-                criteria, MIN_COMP_COUNT, MAX_COMP_QUERIES
+        validated_records = [
+            candidate
+            for candidate in entry["records"]
+            if candidate.status.value == "complete" and candidate.listing is not None
+        ]
+        discovery_context = DiscoverySelectionContext(
+            search_id=search_id,
+            selected_listing_url=canonical_url(str(record.listing.listing_url)),
+            selected_source_listing_id=record.listing.source_listing_id,
+            validated_listings=[candidate.listing for candidate in validated_records],
+            confirmed_duplicate_urls=sorted(
+                {
+                    merged_url
+                    for candidate in validated_records
+                    for merged_url in candidate.merged_from
+                }
+            ),
+        )
+
+        # The validated discovery run is the first comparable source. Its
+        # records have already passed the provider-detail validation gates and
+        # the selected subject plus confirmed duplicates are excluded here.
+        # Existing comparable search remains a bounded fallback only when the
+        # retained inventory cannot supply the target pool.
+        comps = select_comparable_listings(
+            record.listing,
+            discovery_context.validated_listings,
+            confirmed_duplicate_urls=set(discovery_context.confirmed_duplicate_urls),
+        )
+        nearby_postcodes = resolved_postcode_index.nearby_postcodes(
+            record.listing.postal_code,
+            maximum_distance_km=NEARBY_POSTCODE_RADIUS_KM,
+            limit=NEARBY_POSTCODE_LIMIT,
+        )
+        expanded_listings = []
+        searched_postcodes = []
+        if len(comps) < MIN_COMP_COUNT:
+            for nearby_postcode in nearby_postcodes:
+                expansion_criteria = criteria.model_copy(
+                    update={"postal_codes": [nearby_postcode]}
+                )
+                expansion_service = discovery_service or _default_discovery_service()
+                try:
+                    expansion_run = expansion_service.run(expansion_criteria)
+                except Exception:  # noqa: BLE001 - external discovery is best effort
+                    continue
+                searched_postcodes.append(nearby_postcode)
+                expanded_listings.extend(
+                    candidate.listing
+                    for candidate in expansion_run.records
+                    if candidate.status.value == "complete" and candidate.listing is not None
+                )
+                comps = select_comparable_listings(
+                    record.listing,
+                    [*comps, *expanded_listings],
+                    confirmed_duplicate_urls=set(
+                        discovery_context.confirmed_duplicate_urls
+                    ),
+                    nearby_postcodes=nearby_postcodes,
+                )
+                if len(comps) >= MIN_COMP_COUNT:
+                    break
+        discovery_context = discovery_context.model_copy(
+            update={
+                "nearby_postcodes_considered": nearby_postcodes,
+                "nearby_postcodes_searched": searched_postcodes,
+                "expanded_discovery_listings": expanded_listings,
+            }
+        )
+        if len(comps) < MIN_COMP_COUNT:
+            try:
+                fallback_comps = selected_comp_search.search_comps(
+                    criteria, MIN_COMP_COUNT, MAX_COMP_QUERIES
+                )
+            except Exception:  # noqa: BLE001 - external search must not fail a deal
+                fallback_comps = []
+            comps = select_comparable_listings(
+                record.listing,
+                [*comps, *fallback_comps],
+                confirmed_duplicate_urls=set(discovery_context.confirmed_duplicate_urls),
             )
-        except (ListingSearchError, TimeoutError):
-            comps = []
+        initial_urls = {
+            str(listing.listing_url).rstrip("/")
+            for listing in discovery_context.validated_listings
+        }
+        expanded_urls = {
+            str(listing.listing_url).rstrip("/") for listing in expanded_listings
+        }
+        comparable_selections: list[ComparableSelection] = []
+        for rank, comparable in enumerate(comps, start=1):
+            comparable_url = str(comparable.listing_url).rstrip("/")
+            if comparable_url in initial_urls:
+                source = "validated_discovery_inventory"
+            elif comparable_url in expanded_urls:
+                source = "nearby_postcode_discovery"
+            else:
+                source = "fallback_comparable_search"
+            distance_km = resolved_postcode_index.distance_between_postcodes(
+                record.listing.postal_code, comparable.postal_code
+            )
+            if comparable.postal_code == record.listing.postal_code:
+                location_reason = "same postcode"
+            elif distance_km is not None:
+                location_reason = f"{distance_km:.1f} km from subject postcode"
+            else:
+                location_reason = "postcode distance unavailable"
+            comparable_selections.append(
+                ComparableSelection(
+                    listing=comparable,
+                    source=source,
+                    rank=rank,
+                    postcode_distance_km=distance_km,
+                    selection_reason=f"{source.replace('_', ' ')}; {location_reason}",
+                )
+            )
         market_basis = build_market_basis(
             comps,
             criteria,
@@ -598,7 +816,13 @@ def create_app(
         thread_id = str(uuid4())
         with open_sqlite_graph(database_path, **graph_options) as graph:
             graph.invoke(
-                initial_state_for_listing(record.listing, criteria, market_basis),
+                initial_state_for_listing(
+                    record.listing,
+                    criteria,
+                    market_basis,
+                    discovery_context,
+                    comparable_selections,
+                ),
                 _config(thread_id),
             )
             return _deal_view(graph, thread_id)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_serializer, model_validator
@@ -47,6 +47,7 @@ class WorkflowOutcome(StrEnum):
     SHORTLIST_REJECTED = "shortlist_rejected"
     CONTACT_READY = "contact_ready"
     CONTACT_NOT_FOUND = "contact_not_found"
+    CONTACT_METHOD_REQUIRED = "contact_method_required"
     OUTREACH_APPROVED = "outreach_approved"
     OUTREACH_REJECTED = "outreach_rejected"
     OUTREACH_REVISION_REQUESTED = "outreach_revision_requested"
@@ -142,6 +143,41 @@ class PropertyListing(StrictModel):
     @field_serializer("listing_url")
     def serialize_listing_url(self, value: HttpUrl | None) -> str | None:
         return str(value) if value is not None else None
+
+
+class DiscoverySelectionContext(StrictModel):
+    """Validated discovery evidence retained when a listing becomes a deal.
+
+    The inventory is deliberately stored before comparable selection so later
+    agents can reuse the exact validated discovery run without re-querying a
+    listing provider. ``confirmed_duplicate_urls`` records only URLs that the
+    discovery pipeline merged on verified shared identifiers; possible
+    cross-portal matches remain available on the discovery record and are not
+    treated as exclusions.
+    """
+
+    search_id: str = Field(min_length=1)
+    selected_listing_url: str = Field(min_length=8)
+    selected_source_listing_id: str = Field(min_length=1)
+    validated_listings: list[PropertyListing] = Field(default_factory=list)
+    confirmed_duplicate_urls: list[str] = Field(default_factory=list)
+    nearby_postcodes_considered: list[str] = Field(default_factory=list)
+    nearby_postcodes_searched: list[str] = Field(default_factory=list)
+    expanded_discovery_listings: list[PropertyListing] = Field(default_factory=list)
+
+
+class ComparableSelection(StrictModel):
+    """One traceable comparable selected for a deal's market basis."""
+
+    listing: PropertyListing
+    source: Literal[
+        "validated_discovery_inventory",
+        "nearby_postcode_discovery",
+        "fallback_comparable_search",
+    ]
+    rank: int = Field(ge=1)
+    postcode_distance_km: float | None = Field(default=None, ge=0)
+    selection_reason: str = Field(min_length=1)
 
 
 class ScoutAssessment(StrictModel):

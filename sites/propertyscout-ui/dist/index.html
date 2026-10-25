@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content="Start and review PropertyScout AI acquisition searches." />
     <title>PropertyScout AI</title>
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=20261025-13" />
   </head>
   <body>
     <header class="site-header">
@@ -113,18 +113,6 @@
           <p id="form-error" class="error" role="alert" hidden></p>
         </form>
 
-        <aside class="process-card" aria-label="How the search works">
-          <p class="step">Workflow</p>
-          <h2>Six agents, one deal state</h2>
-          <ol>
-            <li class="active"><span>1</span><div><strong>Scout</strong><small>Find matching listings</small></div></li>
-            <li><span>2</span><div><strong>Analyse</strong><small>Yield, risk and thesis</small></div></li>
-            <li><span>3</span><div><strong>Research</strong><small>Verify the right contact</small></div></li>
-            <li><span>4</span><div><strong>Outreach</strong><small>Draft with your approval</small></div></li>
-            <li><span>5</span><div><strong>Schedule</strong><small>Stay inside your hours</small></div></li>
-            <li><span>6</span><div><strong>Prepare</strong><small>Build the call brief</small></div></li>
-          </ol>
-        </aside>
       </section>
 
       <section id="results" class="results" aria-live="polite" hidden>
@@ -138,11 +126,20 @@
       <section id="discovery" class="results" aria-live="polite">
         <div class="results-heading">
           <div><p class="eyebrow">Discovery inventory</p><h2>Discovered properties</h2></div>
-          <button type="button" id="refresh-discoveries" class="ghost-button">Refresh</button>
+          <div class="inventory-actions">
+            <button type="button" id="refresh-discoveries" class="ghost-button">Refresh</button>
+            <button type="button" id="clear-discoveries" class="ghost-button">Clear inventory</button>
+          </div>
         </div>
         <p id="discovery-count" class="deal-count" role="status"></p>
         <div id="discovery-diagnostics" class="diagnostic-strip"></div>
         <p id="discovery-empty" class="empty-note" hidden></p>
+        <div
+        id="discovery-tabs"
+        class="discovery-tabs"
+        role="group"
+        aria-label="Discovery listing filters"
+        ></div>
         <div id="discovery-grid" class="deal-grid"></div>
       </section>
 
@@ -152,11 +149,20 @@
           <button type="button" id="refresh-deals" class="ghost-button">Refresh</button>
         </div>
         <p id="deal-count" class="deal-count" role="status"></p>
+        <div id="pipeline-summary" class="pipeline-summary" aria-label="Pipeline overview"></div>
+        <div id="deal-tabs" class="deal-tabs" role="tablist" aria-label="Deal pipeline stages"></div>
+        <div id="deal-controls" class="deal-controls" aria-label="Deal filters and view controls">
+          <label>Location<select id="deal-city-filter"><option value="">All locations</option></select></label>
+          <label>Status<select id="deal-status-filter"><option value="all">All statuses</option><option value="needs-action">Needs action</option><option value="active">In progress</option><option value="rejected">Rejected</option></select></label>
+          <label>Sort by<select id="deal-sort"><option value="score">Highest score</option><option value="price-low">Lowest price</option><option value="price-high">Highest price</option><option value="gap">Best price vs estimate</option></select></label>
+          <button type="button" id="deal-compare-toggle" class="ghost-button">Compare deals</button>
+        </div>
         <p id="dashboard-empty" class="empty-note" hidden></p>
+        <section id="deal-comparison" class="deal-comparison" hidden></section>
         <div id="deal-grid" class="deal-grid"></div>
       </section>
     </main>
 
-    <script src="app.js" defer></script>
+    <script src="app.js?v=20261025-36" defer></script>
   </body>
 </html>

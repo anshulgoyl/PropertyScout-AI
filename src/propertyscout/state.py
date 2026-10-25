@@ -9,7 +9,9 @@ from uuid import UUID
 from propertyscout.schemas import (
     ApprovalRecord,
     AuditEvent,
+    ComparableSelection,
     ContactCandidate,
+    DiscoverySelectionContext,
     EmailSendReceipt,
     InboundReply,
     InvestmentAnalysis,
@@ -42,6 +44,8 @@ class DealState(TypedDict):
 
     candidate_properties: NotRequired[list[PropertyListing]]
     property: NotRequired[PropertyListing]
+    discovery_context: NotRequired[DiscoverySelectionContext]
+    comparable_selections: NotRequired[list[ComparableSelection]]
     market_basis: NotRequired[MarketBasis]
     scout_assessment: NotRequired[ScoutAssessment]
     analysis: NotRequired[InvestmentAnalysis]

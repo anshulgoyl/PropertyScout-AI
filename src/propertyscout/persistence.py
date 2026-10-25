@@ -55,3 +55,38 @@ def list_sqlite_thread_ids(database_path: str | Path) -> list[str]:
         return [row[0] for row in rows]
     finally:
         connection.close()
+
+
+def delete_sqlite_thread(database_path: str | Path, thread_id: str) -> bool:
+    """Permanently remove one local workflow thread and its checkpoints."""
+
+    path = Path(database_path).expanduser().resolve()
+    if not path.exists():
+        return False
+    connection = sqlite3.connect(path)
+    try:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        found = False
+        for table in ("writes", "checkpoints"):
+            if table not in tables:
+                continue
+            columns = {
+                row[1]
+                for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            if "thread_id" not in columns:
+                continue
+            exists = connection.execute(
+                f"SELECT 1 FROM {table} WHERE thread_id = ? LIMIT 1", (thread_id,)
+            ).fetchone()
+            found = found or exists is not None
+            connection.execute(f"DELETE FROM {table} WHERE thread_id = ?", (thread_id,))
+        connection.commit()
+        return found
+    finally:
+        connection.close()

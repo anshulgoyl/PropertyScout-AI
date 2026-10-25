@@ -1,4 +1,8 @@
-from propertyscout.analyst import InvestmentReasoner, analyse_property
+from propertyscout.analyst import (
+    InvestmentReasoner,
+    analyse_property,
+    select_comparable_listings,
+)
 from propertyscout.bootstrap import default_criteria, fixture_market_basis
 from propertyscout.fixtures import sample_properties
 from propertyscout.schemas import (
@@ -67,6 +71,60 @@ def test_missing_market_basis_routes_to_research() -> None:
 
     assert analysis.recommendation == AnalysisRecommendation.RESEARCH
     assert analysis.missing_critical_data == ["market_basis"]
+
+
+def test_discovery_comparable_selection_excludes_subject_and_confirmed_duplicates() -> None:
+    subject = sample_properties()["shortlist"].model_copy(
+        update={"postal_code": "50667", "room_count": 3}
+    )
+    same_postcode = subject.model_copy(
+        update={
+            "source_listing_id": "same-postcode",
+            "listing_url": "https://example.com/comp/same-postcode",
+            "asking_price": Money(amount=220_000, currency="EUR"),
+        }
+    )
+    nearby_postcode = subject.model_copy(
+        update={
+            "source_listing_id": "nearby-postcode",
+            "listing_url": "https://example.com/comp/nearby-postcode",
+            "postal_code": "50668",
+            "asking_price": Money(amount=230_000, currency="EUR"),
+        }
+    )
+    numeric_but_unconfirmed = subject.model_copy(
+        update={
+            "source_listing_id": "numeric-but-unconfirmed",
+            "listing_url": "https://example.com/comp/numeric-but-unconfirmed",
+            "postal_code": "50666",
+            "asking_price": Money(amount=225_000, currency="EUR"),
+        }
+    )
+    confirmed_duplicate = subject.model_copy(
+        update={
+            "source_listing_id": "confirmed-duplicate",
+            "listing_url": "https://example.com/comp/confirmed-duplicate",
+            "asking_price": Money(amount=240_000, currency="EUR"),
+        }
+    )
+    selected = select_comparable_listings(
+        subject,
+        [
+            subject,
+            numeric_but_unconfirmed,
+            nearby_postcode,
+            confirmed_duplicate,
+            same_postcode,
+        ],
+        confirmed_duplicate_urls={"https://example.com/comp/confirmed-duplicate"},
+        nearby_postcodes=["50668"],
+    )
+
+    assert [listing.source_listing_id for listing in selected] == [
+        "same-postcode",
+        "nearby-postcode",
+        "numeric-but-unconfirmed",
+    ]
 
 
 def test_condition_bucket_median_is_used_when_available() -> None:

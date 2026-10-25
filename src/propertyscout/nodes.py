@@ -9,7 +9,10 @@ from uuid import uuid4
 from langgraph.types import interrupt
 
 from propertyscout.analyst import InvestmentReasoner, RuleBasedReasoner, analyse_property
-from propertyscout.contact_research import ContactResearchService, FixtureContactResearchService
+from propertyscout.contact_research import (
+    ContactResearchService,
+    ListingPageContactResearchService,
+)
 from propertyscout.email_gateway import EmailGateway
 from propertyscout.meeting_intelligence import (
     MeetingBriefService,
@@ -160,7 +163,7 @@ def create_investment_analyst(reasoner: InvestmentReasoner | None = None):
 def create_contact_researcher(service: ContactResearchService | None = None):
     """Create a contact-research node with an injectable data service."""
 
-    selected_service = service or FixtureContactResearchService()
+    selected_service = service or ListingPageContactResearchService()
 
     def contact_researcher(state: DealState) -> dict:
         candidates = selected_service.search(state["property"])
@@ -196,8 +199,24 @@ def select_confident_contact(state: DealState) -> dict:
 
 def mark_contact_not_found(state: DealState) -> dict:
     return {
+        # A missing contact is a research result, not a rejection of the
+        # property.  Keep it in the Contact lane so the investor can use the
+        # listing link or add details later.
+        "current_stage": WorkflowStage.CONTACT_RESEARCH,
         "outcome": WorkflowOutcome.CONTACT_NOT_FOUND,
         "audit_events": [_event("contact_researcher", "contact_not_found")],
+    }
+
+
+def mark_contact_method_required(state: DealState) -> dict:
+    """Keep a phone-only contact in Contact instead of trying to draft email."""
+
+    return {
+        "current_stage": WorkflowStage.CONTACT_RESEARCH,
+        "outcome": WorkflowOutcome.CONTACT_METHOD_REQUIRED,
+        "audit_events": [
+            _event("contact_researcher", "contact_method_required")
+        ],
     }
 
 

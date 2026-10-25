@@ -50,22 +50,22 @@ def search_query_limit_from_env() -> int:
 def discovery_search_budget_from_env() -> int:
     """Authenticated search budget for the discovery engine (CLI default: 10)."""
 
-    return _bounded_env_int("PROPERTYSCOUT_DISCOVERY_SEARCH_BUDGET", default=10, maximum=50)
+    return _bounded_env_int("PROPERTYSCOUT_DISCOVERY_SEARCH_BUDGET", default=30, maximum=50)
 
 
 def discovery_index_fetch_budget_from_env() -> int:
     """Keyless index-page fetches for the discovery engine (CLI default: 10)."""
 
     return _bounded_env_int(
-        "PROPERTYSCOUT_DISCOVERY_INDEX_FETCH_BUDGET", default=10, maximum=50
+        "PROPERTYSCOUT_DISCOVERY_INDEX_FETCH_BUDGET", default=30, maximum=50
     )
 
 
 def discovery_detail_fetch_budget_from_env() -> int:
-    """Keyless individual-listing fetches for the discovery engine (CLI default: 20)."""
+    """Individual listing-page fetches for discovery (default: 80)."""
 
     return _bounded_env_int(
-        "PROPERTYSCOUT_DISCOVERY_DETAIL_FETCH_BUDGET", default=20, maximum=100
+        "PROPERTYSCOUT_DISCOVERY_DETAIL_FETCH_BUDGET", default=80, maximum=150
     )
 
 

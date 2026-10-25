@@ -18,6 +18,8 @@ from propertyscout.market_search import (
     extract_condition,
     merge_page_listing,
     normalize_search_result,
+    purchase_price_value,
+    rejection_reasons,
     search_queries,
 )
 from propertyscout.nodes import market_scout
@@ -312,6 +314,7 @@ def captured_results(filename: str) -> list[dict]:
 
 def test_city_aliases_include_umlaut_transliteration_and_ascii_forms() -> None:
     assert city_aliases("Düsseldorf") == ("düsseldorf", "duesseldorf", "dusseldorf")
+    assert city_aliases("Dusseldorf") == ("düsseldorf", "duesseldorf", "dusseldorf")
     assert city_aliases("Cologne") == ("cologne", "köln", "koeln")
     assert city_aliases("Munich") == ("munich", "münchen", "muenchen")
 
@@ -443,6 +446,51 @@ def test_eur_price_values_skip_dollar_prefixed_amounts() -> None:
     assert eur_price_values("$556,200 €515,000") == [515_000.0]
     assert eur_price_values("€515,000") == [515_000.0]
     assert eur_price_values("785.000,00 €") == [785_000.0]
+
+
+def test_purchase_price_value_prefers_kaufpreis_over_rent_and_deposit() -> None:
+    text = (
+        "Kaltmiete 1.250 € monatlich, Kaution 3.750 €. "
+        "Kaufpreis: 250.000 € inklusive Stellplatz."
+    )
+
+    assert purchase_price_value(text) == 250_000.0
+
+
+def test_purchase_price_value_does_not_guess_between_unlabelled_amounts() -> None:
+    assert purchase_price_value("20.150 € und 250.000 €") is None
+
+
+def test_rejection_reasons_rejects_an_implausibly_low_price_per_sqm() -> None:
+    result = {
+        "title": "Neubauwohnung in Düsseldorf",
+        "url": "https://example.com/low-price",
+        "snippet": "Kaufpreis 25.000 € · 97 m² · 3 Zimmer · 40211 Düsseldorf",
+    }
+
+    assert "implausible-price-per-sqm" in rejection_reasons(
+        result, duesseldorf_criteria()
+    )
+
+
+def test_detail_page_uses_kaufpreis_instead_of_annual_rent() -> None:
+    page = {
+        "url": "https://example.com/detail-price-label",
+        "title": "Vermietete Eigentumswohnung in Düsseldorf",
+        "content": (
+            "Jahreskaltmiete 20.150 €\n"
+            "Kaufpreis 250.000 €\n"
+            "67 m² · 2 Zimmer · 40211 Düsseldorf"
+        ),
+    }
+
+    listing, reasons = merge_page_listing(
+        page, page["url"], duesseldorf_criteria(), None
+    )
+
+    assert reasons == []
+    assert listing is not None
+    assert listing.asking_price.amount == 250_000
 
 
 def test_multi_price_aggregator_page_is_quarantined() -> None:

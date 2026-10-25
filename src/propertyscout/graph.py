@@ -25,6 +25,7 @@ from propertyscout.nodes import (
     create_send_outreach,
     initialize_deal,
     mark_analysis_rejected,
+    mark_contact_method_required,
     mark_contact_not_found,
     mark_scout_rejected,
     market_scout,
@@ -46,9 +47,11 @@ from propertyscout.schemas import (
     ApprovalDecision,
     ApprovalRecord,
     AuditEvent,
+    ComparableSelection,
     ContactCandidate,
     ContactType,
     EmailSendReceipt,
+    DiscoverySelectionContext,
     FinancialMetrics,
     InboundReply,
     InvestmentAnalysis,
@@ -122,6 +125,14 @@ def route_after_contact_research(
     return "contact_resolution"
 
 
+def route_after_contact_selection(
+    state: DealState,
+) -> Literal["outreach_agent", "contact_method_required"]:
+    """Only email-capable contacts may enter the email-drafting workflow."""
+
+    return "outreach_agent" if state["selected_contact"].email else "contact_method_required"
+
+
 def route_after_outreach_approval(state: DealState) -> Literal["complete", "send_outreach"]:
     decision = state["approvals"]["outreach"].decision
     return "send_outreach" if decision == ApprovalDecision.APPROVED else "complete"
@@ -162,6 +173,7 @@ def build_graph(
     builder.add_node("contact_resolution", contact_resolution)
     builder.add_node("contact_ready", select_confident_contact)
     builder.add_node("contact_not_found", mark_contact_not_found)
+    builder.add_node("contact_method_required", mark_contact_method_required)
     builder.add_node("outreach_agent", create_outreach_agent(outreach_service))
     builder.add_node("outreach_approval", outreach_approval)
     builder.add_node("send_outreach", create_send_outreach(email_gateway or FakeEmailGateway()))
@@ -207,9 +219,24 @@ def build_graph(
             "contact_resolution": "contact_resolution",
         },
     )
-    builder.add_edge("contact_resolution", "outreach_agent")
-    builder.add_edge("contact_ready", "outreach_agent")
+    builder.add_conditional_edges(
+        "contact_resolution",
+        route_after_contact_selection,
+        {
+            "outreach_agent": "outreach_agent",
+            "contact_method_required": "contact_method_required",
+        },
+    )
+    builder.add_conditional_edges(
+        "contact_ready",
+        route_after_contact_selection,
+        {
+            "outreach_agent": "outreach_agent",
+            "contact_method_required": "contact_method_required",
+        },
+    )
     builder.add_edge("contact_not_found", "complete")
+    builder.add_edge("contact_method_required", "complete")
     builder.add_edge("outreach_agent", "outreach_approval")
     builder.add_conditional_edges(
         "outreach_approval",
@@ -249,9 +276,11 @@ def create_state_serializer() -> JsonPlusSerializer:
             ApprovalDecision,
             ApprovalRecord,
             AuditEvent,
+            ComparableSelection,
             ContactCandidate,
             ContactType,
             EmailSendReceipt,
+            DiscoverySelectionContext,
             FinancialMetrics,
             InboundReply,
             InvestmentAnalysis,

@@ -1,8 +1,12 @@
 from fastapi.testclient import TestClient
 
 from propertyscout.api import create_app, derive_workflow_status
+from propertyscout.graph import create_state_serializer
 from propertyscout.discovery import DiscoveryService
+from propertyscout.fixtures import sample_properties
 from propertyscout.market_search import FixtureListingSearchService
+from propertyscout.postcode_proximity import PostcodeCoordinateIndex
+from propertyscout.schemas import ComparableSelection, DiscoverySelectionContext
 from tests.test_discovery import FakeSearchClient, replay_service
 
 
@@ -64,6 +68,16 @@ def test_api_rejects_resume_when_deal_is_not_paused(tmp_path) -> None:
     )
 
     assert response.status_code == 409
+
+
+def test_contact_not_found_remains_actionable_in_contact_research() -> None:
+    status, pending, diagnostic = derive_workflow_status(
+        {"current_stage": "contact_research", "outcome": "contact_not_found"},
+        [],
+        [],
+    )
+
+    assert (status, pending, diagnostic) == ("needs_research", None, None)
 
 
 def test_api_returns_not_found_for_unknown_thread(tmp_path) -> None:
@@ -448,16 +462,28 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert page.status_code == 200
     assert 'id="dashboard"' in page.text
     assert 'id="deal-grid"' in page.text
+    assert 'id="deal-tabs"' in page.text
     assert 'id="refresh-deals"' in page.text
     assert 'id="discovery"' in page.text
     assert 'id="discovery-grid"' in page.text
     assert 'id="refresh-discoveries"' in page.text
+    assert 'id="clear-discoveries"' in page.text
+    assert 'app.js?v=20261025-12' in page.text
+    assert 'styles.css?v=20261025-7' in page.text
 
     script = client.get("/app/app.js")
     assert script.status_code == 200
     assert "loadDeals" in script.text
     assert "loadDiscoveries" in script.text
+    assert "criteria: requestFromForm()" in script.text
     assert "Deal Score" in script.text
+    assert "View listing" in script.text
+    assert "deal-comparable-toggle" in script.text
+    assert "Comparable" in script.text
+    assert "updateWorkflowStage" in script.text
+    assert "focusWorkflowDeal" in script.text
+    assert "Scouting properties" in script.text
+    assert "clearDiscoveryView" in script.text
     assert "Market valuation" in script.text
     assert "schedule_exception" in script.text
 
@@ -465,6 +491,7 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert stylesheet.status_code == 200
     assert ".approval-panel" in stylesheet.text
     assert ".discovery-card" in stylesheet.text
+    assert ".deal-links" in stylesheet.text
 
 
 def discovery_client(tmp_path) -> TestClient:
@@ -477,6 +504,7 @@ def discovery_client(tmp_path) -> TestClient:
             discovery_service=service,
             comp_search_service=FixtureListingSearchService(),
             discovery_dir=tmp_path / "discoveries",
+            postcode_index=PostcodeCoordinateIndex.empty(),
             use_llm=False,
         )
     )
@@ -567,7 +595,89 @@ def test_selected_complete_listing_starts_analysis_with_verified_comps(tmp_path)
     assert response.status_code == 201, response.text
     deal = response.json()
     assert deal["state"]["property"]["listing_url"] == complete["url"]
+    context = deal["state"]["discovery_context"]
+    assert context["search_id"] == search_id
+    assert context["selected_listing_url"] == complete["url"]
+    assert context["selected_source_listing_id"] == deal["state"]["property"]["source_listing_id"]
+    assert complete["url"] in {
+        listing["listing_url"] for listing in context["validated_listings"]
+    }
+    comparable_selections = deal["state"]["comparable_selections"]
+    assert comparable_selections
+    assert all(selection["rank"] >= 1 for selection in comparable_selections)
+    assert all(
+        selection["listing"]["listing_url"] != complete["url"]
+        for selection in comparable_selections
+    )
+    assert all(selection["selection_reason"] for selection in comparable_selections)
     assert deal["state"]["market_basis"]  # verified comps from the injected service
+
+
+def test_discovery_inventory_is_the_first_comparable_source(tmp_path) -> None:
+    client = discovery_client(tmp_path)
+    search = run_discovery(client)
+    search_id = search["discovery"]["search_id"]
+    run = client.get(f"/discoveries/{search_id}").json()
+    complete = next(record for record in run["records"] if record["status"] == "complete")
+
+    response = client.post(f"/discoveries/{search_id}/deals", json={"url": complete["url"]})
+
+    assert response.status_code == 201, response.text
+    context = response.json()["state"]["discovery_context"]
+    subject_url = context["selected_listing_url"]
+    inventory_urls = {listing["listing_url"] for listing in context["validated_listings"]}
+    assert subject_url in inventory_urls
+
+
+def test_discovery_deal_survives_a_failed_comparable_fallback(tmp_path) -> None:
+    class FailingComparableSearch:
+        def search_comps(self, criteria, minimum_comps, maximum_queries):
+            raise RuntimeError("provider unavailable")
+
+    service, _fetch = replay_service(
+        search_budget=10, index_fetch_budget=10, detail_fetch_budget=70
+    )
+    client = TestClient(
+        create_app(
+            tmp_path / "api.sqlite",
+            discovery_service=service,
+            comp_search_service=FailingComparableSearch(),
+            discovery_dir=tmp_path / "discoveries",
+            postcode_index=PostcodeCoordinateIndex.empty(),
+            use_llm=False,
+        )
+    )
+    search = run_discovery(client)
+    search_id = search["discovery"]["search_id"]
+    records = client.get(f"/discoveries/{search_id}").json()["records"]
+    complete = next(record for record in records if record["status"] == "complete")
+
+    response = client.post(f"/discoveries/{search_id}/deals", json={"url": complete["url"]})
+
+    assert response.status_code == 201, response.text
+    assert response.json()["state"]["comparable_selections"] == []
+
+
+def test_discovery_context_and_comparables_are_serializer_safe() -> None:
+    serializer = create_state_serializer()
+    context_type, context_payload = serializer.dumps_typed(
+        DiscoverySelectionContext(
+            search_id="discovery-test",
+            selected_listing_url="https://example.com/listing/subject",
+            selected_source_listing_id="subject",
+        )
+    )
+    comparable_type, comparable_payload = serializer.dumps_typed(
+        ComparableSelection(
+            listing=sample_properties()["shortlist"],
+            source="validated_discovery_inventory",
+            rank=1,
+            selection_reason="same postcode",
+        )
+    )
+
+    assert serializer.loads_typed((context_type, context_payload)).search_id == "discovery-test"
+    assert serializer.loads_typed((comparable_type, comparable_payload)).rank == 1
 
 
 def test_discovery_history_survives_restart(tmp_path) -> None:
@@ -584,6 +694,35 @@ def test_discovery_history_survives_restart(tmp_path) -> None:
             encoding="utf-8"
         ).splitlines()
     ) - 1
+
+
+def test_clear_discovery_removes_only_its_inventory(tmp_path) -> None:
+    client = discovery_client(tmp_path)
+    search = run_discovery(client)
+    search_id = search["discovery"]["search_id"]
+
+    response = client.delete(f"/discoveries/{search_id}")
+
+    assert response.status_code == 204
+    assert client.get(f"/discoveries/{search_id}").status_code == 404
+    assert client.get("/discoveries").json() == []
+    assert client.get("/deals").json() == []
+
+
+def test_discovery_selection_after_restart_accepts_the_retried_criteria(tmp_path) -> None:
+    first = discovery_client(tmp_path)
+    search = run_discovery(first)
+    search_id = search["discovery"]["search_id"]
+    second = discovery_client(tmp_path)
+    records = second.get(f"/discoveries/{search_id}").json()["records"]
+    complete = next(record for record in records if record["status"] == "complete")
+
+    response = second.post(
+        f"/discoveries/{search_id}/deals",
+        json={"url": complete["url"], "criteria": discovery_search_body()},
+    )
+
+    assert response.status_code == 201, response.text
 
 
 def test_discovery_search_failure_returns_502(tmp_path) -> None:

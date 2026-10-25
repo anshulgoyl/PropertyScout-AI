@@ -7,6 +7,8 @@ from uuid import uuid4
 from propertyscout.analyst import build_market_basis
 from propertyscout.fixtures import sample_comparables, sample_properties
 from propertyscout.schemas import (
+    ComparableSelection,
+    DiscoverySelectionContext,
     InvestmentCriteria,
     MarketBasis,
     Money,
@@ -60,6 +62,8 @@ def initial_state_for_listing(
     property_listing: PropertyListing,
     criteria: InvestmentCriteria,
     market_basis: MarketBasis | None = None,
+    discovery_context: DiscoverySelectionContext | None = None,
+    comparable_selections: list[ComparableSelection] | None = None,
 ) -> DealState:
     """Start a thread for one discovered listing with its search's market basis.
 
@@ -74,4 +78,8 @@ def initial_state_for_listing(
     else:
         state["market_basis"] = market_basis
     state["property"] = property_listing
+    if discovery_context is not None:
+        state["discovery_context"] = discovery_context
+    if comparable_selections is not None:
+        state["comparable_selections"] = comparable_selections
     return state

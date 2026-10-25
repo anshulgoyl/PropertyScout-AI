@@ -32,6 +32,28 @@ _PRICE_BEFORE = re.compile(
     r"(?:€|EUR)" + _PRICE_GAP + r"(?P<value>" + _PRICE_NUMBER + r")",
     re.IGNORECASE,
 )
+_PURCHASE_PRICE_MARKERS = (
+    "kaufpreis",
+    "verkaufspreis",
+    "angebotspreis",
+    "purchase price",
+    "sale price",
+)
+_NON_PURCHASE_PRICE_MARKERS = (
+    "kaltmiete",
+    "warmmiete",
+    "miete",
+    "mietpreis",
+    "mietkosten",
+    "mietzins",
+    "kaution",
+    "nebenkosten",
+    "hausgeld",
+    "courtage",
+    "provision",
+    "gebühr",
+    "rate",
+)
 _ROOMS = re.compile(
     r"(?P<value>\d+(?:[,.]\d+)?)\s*[-\s]?\s*(?:Zi\.?|Zimmer|bedrooms?|rooms?)\b",
     re.IGNORECASE,
@@ -75,6 +97,7 @@ _RENTAL_MARKERS = (
 )
 _CITY_ALIASES = {
     "cologne": ("cologne", "köln", "koeln"),
+    "düsseldorf": ("düsseldorf", "duesseldorf", "dusseldorf"),
     "munich": ("munich", "münchen", "muenchen"),
 }
 _ASCII_FOLD_TABLE = str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss"})
@@ -140,6 +163,7 @@ _CONDITION_MARKERS: tuple[tuple[PropertyCondition, tuple[str, ...]], ...] = (
 # A snippet and its fetched detail page may disagree slightly on formatting;
 # differences beyond this share of the price are treated as a conflict.
 PRICE_CONFLICT_TOLERANCE = 0.005
+MIN_PLAUSIBLE_PRICE_PER_SQM = 500
 DEFAULT_DETAIL_FETCH_LIMIT = 3
 DEFAULT_SEARCH_QUERY_LIMIT = 3
 _TRACKING_QUERY_PARAMS = frozenset(
@@ -184,7 +208,27 @@ def city_aliases(city: str) -> tuple[str, ...]:
     """
 
     normalized = city.casefold()
-    aliases = list(_CITY_ALIASES.get(normalized, (normalized,)))
+    input_variants = {
+        normalized,
+        normalized.translate(_ASCII_FOLD_TABLE),
+        normalized.translate(_ASCII_STRIP_TABLE),
+    }
+    aliases: list[str] | None = None
+    for known_aliases in _CITY_ALIASES.values():
+        known_variants = {
+            variant
+            for alias in known_aliases
+            for variant in (
+                alias,
+                alias.translate(_ASCII_FOLD_TABLE),
+                alias.translate(_ASCII_STRIP_TABLE),
+            )
+        }
+        if input_variants & known_variants:
+            aliases = list(known_aliases)
+            break
+    if aliases is None:
+        aliases = [normalized]
     for variant in (
         normalized,
         normalized.translate(_ASCII_FOLD_TABLE),
@@ -233,13 +277,90 @@ def eur_price_values(text: str) -> list[float]:
     is never recorded as the EUR asking price.
     """
 
-    values: list[float] = []
+    matches: list[tuple[int, float]] = []
     for pattern in (_PRICE_AFTER, _PRICE_BEFORE):
         for match in pattern.finditer(text):
             if _is_foreign_currency_value(text, match.start("value")):
                 continue
-            values.append(_german_number(match.group("value")))
-    return values
+            matches.append((match.start("value"), _german_number(match.group("value"))))
+    return [value for _, value in sorted(set(matches), key=lambda item: item[0])]
+
+
+def purchase_price_value(text: str) -> float | None:
+    """Return the labelled sale price, without confusing it with recurring costs.
+
+    Listing pages regularly include a purchase price beside rent, deposit and
+    service-charge amounts.  A nearby purchase label wins; a nearby cost label
+    excludes that amount.  With one unlabelled EUR value we retain the useful
+    simple-snippet fallback.  Multiple unlabelled values are deliberately left
+    unresolved rather than inventing an asking price.
+    """
+
+    candidates = _priced_amount_candidates(text)
+    labelled = [candidate for candidate in candidates if candidate[2] > 0]
+    if labelled:
+        # If two values are both explicitly labelled as purchase prices, use
+        # the first in the document; aggregator detection will quarantine the
+        # page before this value can form a listing.
+        return max(labelled, key=lambda item: (item[2], -item[0]))[1]
+    neutral = [candidate for candidate in candidates if candidate[2] == 0]
+    return neutral[0][1] if len(neutral) == 1 else None
+
+
+def is_implausible_price_per_sqm(price: float | None, area: float | None) -> bool:
+    """Reject incidental small EUR figures presented as a sale price.
+
+    This deliberately conservative floor catches values such as a €25k
+    "purchase price" for a 97 m² city apartment. Such a figure is usually a
+    deposit, reserve, commission, or malformed source field—not a reliable
+    property asking price.
+    """
+
+    return bool(price and area and price / area < MIN_PLAUSIBLE_PRICE_PER_SQM)
+
+
+def _priced_amount_candidates(text: str) -> list[tuple[int, float, int]]:
+    """Return ``(position, amount, semantic score)`` for EUR values in text."""
+
+    candidates: list[tuple[int, float, int]] = []
+    normalized = text.casefold()
+    for pattern in (_PRICE_AFTER, _PRICE_BEFORE):
+        for match in pattern.finditer(text):
+            if _is_foreign_currency_value(text, match.start("value")):
+                continue
+            start, end = match.start("value"), match.end("value")
+            purchase_distance = _nearest_marker_distance(
+                normalized, start, end, _PURCHASE_PRICE_MARKERS
+            )
+            cost_distance = _nearest_marker_distance(
+                normalized, start, end, _NON_PURCHASE_PRICE_MARKERS
+            )
+            score = (
+                10
+                if purchase_distance is not None
+                and (cost_distance is None or purchase_distance < cost_distance)
+                else -20 if cost_distance is not None else 0
+            )
+            candidates.append((start, _german_number(match.group("value")), score))
+
+    return sorted(set(candidates), key=lambda item: item[0])
+
+
+def _nearest_marker_distance(
+    text: str, start: int, end: int, markers: tuple[str, ...]
+) -> int | None:
+    """Distance to the nearest price label within the local listing field."""
+
+    distances: list[int] = []
+    for marker in markers:
+        position = text.find(marker)
+        while position != -1:
+            marker_end = position + len(marker)
+            distance = min(abs(start - marker_end), abs(position - end))
+            if distance <= 60:
+                distances.append(distance)
+            position = text.find(marker, position + len(marker))
+    return min(distances) if distances else None
 
 def _property_content_only(text: str) -> str:
     """Exclude legal notices from property-identity checks."""
@@ -275,10 +396,10 @@ def _is_multi_listing_page(combined: str, price_values: list[float]) -> bool:
     property_text = _property_content_only(combined)
 
     postal_codes = set(_POSTAL_CODE.findall(property_text))
-    purchase_prices = {
-        value
-        for value in eur_price_values(property_text)
-        if value > 10_000
+    candidates = _priced_amount_candidates(property_text)
+    labelled_prices = {value for _, value, score in candidates if score > 0}
+    purchase_prices = labelled_prices or {
+        value for value in eur_price_values(property_text) if value > 10_000
     }
 
     return len(postal_codes) > 1 or len(purchase_prices) > 1
@@ -314,8 +435,16 @@ def rejection_reasons(
     if not price_values:
         reasons.append("no-price")
         return reasons
-    if price_values[0] <= 10_000:
+    asking_price = purchase_price_value(combined)
+    if asking_price is None:
+        reasons.append("ambiguous-price")
+    elif asking_price <= 10_000:
         reasons.append("implausible-price")
+    area_match = _AREA.search(combined)
+    if asking_price is not None and area_match and is_implausible_price_per_sqm(
+        asking_price, _decimal_number(area_match.group("value"))
+    ):
+        reasons.append("implausible-price-per-sqm")
     if _is_multi_listing_page(combined, price_values):
         reasons.append("multi-listing-page")
     return reasons
@@ -433,10 +562,10 @@ def merge_page_listing(
     if _has_rental_intent(normalized) and not _has_sale_intent(normalized):
         reasons.append("rental-intent")
     price_values = eur_price_values(combined)
-    purchase_prices = sorted({value for value in price_values if value > 10_000})
+    asking_price = purchase_price_value(combined)
     if _is_multi_listing_page(combined, price_values):
         reasons.append("multi-listing-page")
-    if not purchase_prices and existing is None:
+    if asking_price is None and existing is None:
         reasons.append("no-price")
     if reasons:
         return None, reasons
@@ -446,21 +575,27 @@ def merge_page_listing(
     build_year_match = _BUILD_YEAR.search(combined)
     energy_match = _ENERGY_CLASS.search(combined)
     postal_codes = _POSTAL_CODE.findall(combined)
+    if asking_price is not None and area_match and is_implausible_price_per_sqm(
+        asking_price, _decimal_number(area_match.group("value"))
+    ):
+        return None, ["implausible-price-per-sqm"]
     page_postal = postal_codes[0] if postal_codes else None
     features = sorted({term for term in _FEATURE_TERMS if term in normalized})
     fetch_evidence = SourceEvidence(
         source_name="Keenable page fetch",
         url=url,
         retrieved_at=datetime.now(UTC),
-        excerpt=content[:1_000],
+        # Retained solely as evidence from this same listing page; Agent 3
+        # uses it for public contact extraction without a new web request.
+        excerpt=content[:12_000],
     )
 
     if existing is not None:
         snippet_price = existing.asking_price.amount
         if page_postal and existing.postal_code and page_postal != existing.postal_code:
             reasons.append("conflicting-attributes")
-        if purchase_prices and not _price_within_tolerance(
-            snippet_price, purchase_prices[0]
+        if asking_price is not None and not _price_within_tolerance(
+            snippet_price, asking_price
         ):
             identity_clear = page_postal is None or page_postal == existing.postal_code
             if not identity_clear:
@@ -470,8 +605,8 @@ def merge_page_listing(
         updates: dict[str, Any] = {"evidence": [*existing.evidence, fetch_evidence]}
         if page_postal:
             updates["postal_code"] = page_postal
-        if purchase_prices:
-            updates["asking_price"] = Money(amount=purchase_prices[0], currency="EUR")
+        if asking_price is not None:
+            updates["asking_price"] = Money(amount=asking_price, currency="EUR")
         if area_match:
             updates["living_area_sqm"] = _decimal_number(area_match.group("value"))
         if rooms_match:
@@ -496,7 +631,7 @@ def merge_page_listing(
             postal_code=page_postal,
             country_code="DE",
             property_type=criteria.property_types[0],
-            asking_price=Money(amount=purchase_prices[0], currency="EUR"),
+            asking_price=Money(amount=asking_price, currency="EUR"),
             living_area_sqm=(
                 _decimal_number(area_match.group("value")) if area_match else None
             ),
@@ -902,7 +1037,7 @@ def build_property_query(criteria: InvestmentCriteria) -> str:
     property_type = criteria.property_types[0]
     location = criteria.locations[0]
     search_type = _PROPERTY_TERMS.get(property_type.casefold(), property_type)
-    aliases = _CITY_ALIASES.get(location.casefold(), (location,))
+    aliases = city_aliases(location)
     parts = [
         search_type,
         " ".join(aliases),
@@ -928,7 +1063,9 @@ def normalize_search_result(
     snippet = str(result.get("snippet") or result.get("description") or "").strip()
     combined = f"{title}\n{snippet}"
     normalized = combined.casefold()
-    asking_price = eur_price_values(combined)[0]
+    asking_price = purchase_price_value(combined)
+    if asking_price is None:
+        return None
 
     rooms_match = _ROOMS.search(combined)
     area_match = _AREA.search(combined)

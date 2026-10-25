@@ -134,6 +134,63 @@ def build_market_basis(
     )
 
 
+def select_comparable_listings(
+    subject: PropertyListing,
+    candidates: list[PropertyListing],
+    *,
+    confirmed_duplicate_urls: set[str] | None = None,
+    nearby_postcodes: list[str] | None = None,
+) -> list[PropertyListing]:
+    """Return usable comparables in deterministic location-first order.
+
+    Postal-code numbers are identifiers, not coordinates.  Consequently this
+    function gives priority only to the subject postcode and to postcodes
+    explicitly provided in ``nearby_postcodes`` by a geographic resolver.  It
+    never assumes that numerically adjacent German postcodes are nearby.
+    """
+
+    def canonical(value: object) -> str:
+        return str(value or "").rstrip("/")
+
+    subject_url = canonical(subject.listing_url)
+    excluded_urls = {canonical(url) for url in (confirmed_duplicate_urls or set())}
+    excluded_urls.add(subject_url)
+    nearby_rank = {
+        postcode: index + 1
+        for index, postcode in enumerate(nearby_postcodes or [])
+        if postcode and postcode != subject.postal_code
+    }
+    selected: list[tuple[tuple[float, float, str], PropertyListing]] = []
+    seen_urls: set[str] = set()
+
+    for candidate in candidates:
+        url = canonical(candidate.listing_url)
+        if not url or url in excluded_urls or url in seen_urls:
+            continue
+        if candidate.source_listing_id == subject.source_listing_id:
+            continue
+        if candidate.property_type.casefold() != subject.property_type.casefold():
+            continue
+        if candidate.asking_price.currency != subject.asking_price.currency:
+            continue
+        if candidate.living_area_sqm is None or candidate.asking_price.amount <= 0:
+            continue
+        seen_urls.add(url)
+        if candidate.postal_code == subject.postal_code:
+            postcode_rank = 0
+        elif candidate.postal_code in nearby_rank:
+            postcode_rank = nearby_rank[candidate.postal_code]
+        else:
+            postcode_rank = len(nearby_rank) + 1
+
+        subject_area = subject.living_area_sqm or candidate.living_area_sqm
+        area_gap = abs(candidate.living_area_sqm - subject_area) / subject_area
+        room_gap = abs((candidate.room_count or 0) - (subject.room_count or 0))
+        selected.append(((postcode_rank, area_gap + room_gap * 0.1, url), candidate))
+
+    return [candidate for _, candidate in sorted(selected, key=lambda item: item[0])]
+
+
 class InvestmentReasoner(Protocol):
     """Provider-neutral interface for qualitative investment judgment."""
 
