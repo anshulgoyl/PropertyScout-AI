@@ -614,7 +614,7 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert 'id="discovery-grid"' in page.text
     assert 'id="refresh-discoveries"' in page.text
     assert 'id="clear-discoveries"' in page.text
-    assert 'app.js?v=20261029-24' in page.text
+    assert 'app.js?v=20261029-25' in page.text
     assert 'styles.css?v=20261029-14' in page.text
 
     script = client.get("/app/app.js")
@@ -654,6 +654,9 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert "Separate facts from assumptions" in script.text
     assert "Prioritise what you ask for" in script.text
     assert "it is not legal advice" in script.text
+    assert "function dealLocation(property)" in script.text
+    assert '[property.city, property.postal_code]' in script.text
+    assert 'Location to confirm' in script.text
 
     styles = client.get("/app/styles.css")
     assert styles.status_code == 200

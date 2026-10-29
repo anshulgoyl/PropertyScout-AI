@@ -1234,6 +1234,14 @@ function rejectionExplanation(deal) {
   return rejectedApproval?.feedback || "";
 }
 
+function dealLocation(property) {
+  const location = [property.city, property.postal_code]
+    .map((value) => typeof value === "string" ? value.trim() : "")
+    .filter(Boolean)
+    .join(" · ");
+  return location || "Location to confirm";
+}
+
 function dealCard(deal) {
   const state = deal.state || {};
   const property = state.property || {};
@@ -1264,7 +1272,7 @@ function dealCard(deal) {
 
   card.innerHTML = `
     <div class="result-meta">
-      <span>${escapeHtml(property.postal_code || property.city || "")}</span>
+      <span class="deal-location">${escapeHtml(dealLocation(property))}</span>
       <span class="status ${meta.cls}">${escapeHtml(deal.workflow_label || meta.label)}</span>
       ${rejectionReason ? `<span class="rejection-explanation" title="${escapeHtml(rejectionReason)}">${escapeHtml(rejectionReason)}</span>` : ""}
       ${comparisonMode ? `<label class="compare-choice"><input type="checkbox" data-compare-choice ${comparisonThreadIds.has(deal.thread_id) ? "checked" : ""} /> Compare</label>` : ""}
