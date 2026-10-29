@@ -89,6 +89,24 @@ def test_document_review_separates_matches_gaps_and_contract_questions(tmp_path)
     assert "not legal advice" in review["notice"]
 
 
+def test_document_upload_rejects_duplicate_filenames(tmp_path) -> None:
+    client = fixture_client(tmp_path)
+    thread_id = client.post("/deals", json={"property_key": "shortlist"}).json()["thread_id"]
+
+    first = client.post(
+        f"/deals/{thread_id}/documents",
+        files={"files": ("energy-certificate.txt", b"Energy certificate E", "text/plain")},
+    )
+    duplicate = client.post(
+        f"/deals/{thread_id}/documents",
+        files={"files": ("energy-certificate.txt", b"replacement", "text/plain")},
+    )
+
+    assert first.status_code == 200
+    assert duplicate.status_code == 409
+    assert "already exists" in duplicate.json()["detail"]
+
+
 def test_pdf_import_listing_extracts_plainly_stated_property_facts() -> None:
     listing = _pdf_import_listing(
         """

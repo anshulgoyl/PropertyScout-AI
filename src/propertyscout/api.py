@@ -1143,6 +1143,15 @@ def create_app(
         allowed = {".pdf", ".doc", ".docx", ".txt", ".jpg", ".jpeg", ".png"}
         target = database_path.parent / "documents" / thread_id
         target.mkdir(parents=True, exist_ok=True)
+        incoming_names = [Path(upload.filename or "document").name for upload in files[:10]]
+        duplicate_names = {name for name in incoming_names if incoming_names.count(name) > 1}
+        existing_names = {name for name in incoming_names if (target / name).exists()}
+        if duplicate_names or existing_names:
+            duplicates = sorted(duplicate_names | existing_names)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"A document with this name already exists: {', '.join(duplicates)}. Rename it before uploading.",
+            )
         saved: list[dict[str, str | int]] = []
         for upload in files[:10]:
             name = Path(upload.filename or "document").name
