@@ -1067,7 +1067,7 @@ input,select,.input-prefix,.input-suffix { border-color:#d4dce7; border-radius:7
 .education-browser-heading span { color:var(--green); font-size:10px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
 .education-browser-heading strong { color:var(--ink); font-size:15px; }
 .education-browser-heading small { color:var(--muted); font-size:12px; white-space:nowrap; }
-.education-categories { display:grid; grid-template-columns:1.08fr repeat(4,1fr); gap:8px; }
+.education-categories { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
 .education-category { display:grid; min-height:78px; align-content:center; gap:2px; padding:11px 13px; border:1px solid #d8e3e8; border-radius:9px; background:#fff; color:var(--ink); text-align:left; }
 .education-category:hover { border-color:#9abfb8; background:#f5fbf9; }
 .education-category.active { border-color:#167e72; background:#173a52; color:#fff; box-shadow:0 7px 16px rgba(23,58,82,.18); }

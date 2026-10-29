@@ -262,7 +262,7 @@ const EDUCATION_DETAILS = {
   },
 };
 
-let activeEducationCategory = "all";
+let activeEducationCategory = "foundation";
 
 function setEducationCategory(category) {
   activeEducationCategory = category;

@@ -582,8 +582,8 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert 'id="discovery-grid"' in page.text
     assert 'id="refresh-discoveries"' in page.text
     assert 'id="clear-discoveries"' in page.text
-    assert 'app.js?v=20261029-19' in page.text
-    assert 'styles.css?v=20261029-12' in page.text
+    assert 'app.js?v=20261029-20' in page.text
+    assert 'styles.css?v=20261029-13' in page.text
 
     script = client.get("/app/app.js")
     assert script.status_code == 200
@@ -619,6 +619,8 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert styles.status_code == 200
     assert "button:focus-visible" in styles.text
     assert "--focus" in styles.text
+
+    assert "Full investment view" not in page.text
 
     stylesheet = client.get("/app/styles.css")
     assert stylesheet.status_code == 200
