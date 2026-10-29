@@ -119,6 +119,23 @@ class DealView(BaseModel):
     status: str
     pending_approval_type: str | None = None
     diagnostic: dict[str, Any] | None = None
+    workflow_label: str = "Ready to Analyze"
+    next_best_action: "NextBestAction | None" = None
+
+
+class NextBestAction(BaseModel):
+    """The single clearest investor action for a saved deal."""
+
+    label: str
+    detail: str
+    destination: Literal["scout", "analyze", "contact", "financials", "documents"]
+
+
+class WorkflowPresentation(BaseModel):
+    """Investor-facing workflow state without changing graph semantics."""
+
+    label: str
+    next_action: NextBestAction | None = None
 
 
 class DiscoveryRecordView(BaseModel):
@@ -385,6 +402,88 @@ def derive_workflow_status(
     )
 
 
+def present_workflow(
+    state: dict[str, Any],
+    status: str,
+    pending_approval_type: str | None,
+    next_nodes: list[str],
+) -> WorkflowPresentation:
+    """Translate graph state into one clear investor-facing next step.
+
+    The durable LangGraph status remains untouched; this presentation layer is
+    deliberately small so the dashboard can be helpful without rewriting the
+    underlying workflow or changing any decision route.
+    """
+
+    missing = state.get("analysis", {}).get("missing_critical_data", [])
+    if missing:
+        requested = ", ".join(item.replace("_", " ") for item in missing)
+        return WorkflowPresentation(
+            label="Needs Broker Info",
+            next_action=NextBestAction(
+                label="Ask for More Information",
+                detail=f"Request {requested} before relying on the investment case.",
+                destination="contact",
+            ),
+        )
+    if status == "waiting_human":
+        if pending_approval_type == "shortlist":
+            return WorkflowPresentation(
+                label="Needs Your Review",
+                next_action=NextBestAction(
+                    label="Move to Contact Research",
+                    detail="Review the price and comparable evidence, then decide whether to research the contact.",
+                    destination="contact",
+                ),
+            )
+        return WorkflowPresentation(
+            label="Needs Your Review",
+            next_action=NextBestAction(
+                label="Open Deal Details",
+                detail="Review the available evidence and make the pending decision.",
+                destination="analyze",
+            ),
+        )
+    if status == "rejected":
+        return WorkflowPresentation(
+            label="Not Progressing",
+            next_action=NextBestAction(
+                label="Open Deal Details",
+                detail="Review the recorded reason before reopening this decision.",
+                destination="analyze",
+            ),
+        )
+    if next_nodes:
+        return WorkflowPresentation(label="Research in Progress")
+    current_stage = state.get("current_stage")
+    if current_stage in {"contact_research", "awaiting_contact_resolution"}:
+        return WorkflowPresentation(
+            label="Ready for Financial Estimate",
+            next_action=NextBestAction(
+                label="Build Financial Estimate",
+                detail="Use the confirmed listing and contact evidence to test the investment case.",
+                destination="financials",
+            ),
+        )
+    if current_stage in {"outreach_drafting", "awaiting_outreach_approval", "awaiting_reply"}:
+        return WorkflowPresentation(
+            label="Research in Progress",
+            next_action=NextBestAction(
+                label="Open Deal Details",
+                detail="Review the contact evidence and the next outreach step.",
+                destination="contact",
+            ),
+        )
+    return WorkflowPresentation(
+        label="Ready to Analyze",
+        next_action=NextBestAction(
+            label="Open Deal Details",
+            detail="Review the market evidence and decide whether the property should progress.",
+            destination="analyze",
+        ),
+    )
+
+
 def _deal_view(graph, thread_id: str) -> DealView:
     snapshot = graph.get_state(_config(thread_id))
     if not snapshot.values:
@@ -402,6 +501,12 @@ def _deal_view(graph, thread_id: str) -> DealView:
         encoded_interrupts,
         next_nodes,
     )
+    presentation = present_workflow(
+        state,
+        deal_status,
+        pending_approval_type,
+        next_nodes,
+    )
     return DealView(
         thread_id=thread_id,
         state=state,
@@ -410,6 +515,8 @@ def _deal_view(graph, thread_id: str) -> DealView:
         status=deal_status,
         pending_approval_type=pending_approval_type,
         diagnostic=diagnostic,
+        workflow_label=presentation.label,
+        next_best_action=presentation.next_action,
     )
 
 

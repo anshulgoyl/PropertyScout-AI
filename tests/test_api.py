@@ -1,6 +1,11 @@
 from fastapi.testclient import TestClient
 
-from propertyscout.api import _pdf_import_listing, create_app, derive_workflow_status
+from propertyscout.api import (
+    _pdf_import_listing,
+    create_app,
+    derive_workflow_status,
+    present_workflow,
+)
 from propertyscout.graph import create_state_serializer
 from propertyscout.discovery import DiscoveryService
 from propertyscout.fixtures import sample_properties
@@ -131,6 +136,35 @@ def test_contact_not_found_remains_actionable_in_contact_research() -> None:
     )
 
     assert (status, pending, diagnostic) == ("needs_research", None, None)
+
+
+def test_workflow_presentation_prioritises_missing_broker_information() -> None:
+    presentation = present_workflow(
+        {
+            "current_stage": "analysis",
+            "analysis": {"missing_critical_data": ["annual_rent"]},
+        },
+        "needs_research",
+        None,
+        [],
+    )
+
+    assert presentation.label == "Needs Broker Info"
+    assert presentation.next_action.label == "Ask for More Information"
+    assert presentation.next_action.destination == "contact"
+
+
+def test_workflow_presentation_turns_shortlist_approval_into_contact_action() -> None:
+    presentation = present_workflow(
+        {"current_stage": "awaiting_shortlist_approval"},
+        "waiting_human",
+        "shortlist",
+        [],
+    )
+
+    assert presentation.label == "Needs Your Review"
+    assert presentation.next_action.label == "Move to Contact Research"
+    assert presentation.next_action.destination == "contact"
 
 
 def test_api_returns_not_found_for_unknown_thread(tmp_path) -> None:
@@ -521,8 +555,8 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert 'id="discovery-grid"' in page.text
     assert 'id="refresh-discoveries"' in page.text
     assert 'id="clear-discoveries"' in page.text
-    assert 'app.js?v=20261029-10' in page.text
-    assert 'styles.css?v=20261029-03' in page.text
+    assert 'app.js?v=20261029-11' in page.text
+    assert 'styles.css?v=20261029-04' in page.text
 
     script = client.get("/app/app.js")
     assert script.status_code == 200
@@ -554,6 +588,15 @@ def test_dashboard_client_renders_evidence_confidence_and_score_drivers(tmp_path
 
     assert "Evidence confidence" in script.text
     assert "score_drivers" in script.text
+
+
+def test_dashboard_client_renders_the_next_best_action(tmp_path) -> None:
+    client = fixture_client(tmp_path)
+
+    script = client.get("/app/app.js")
+
+    assert "Next best action" in script.text
+    assert "next_best_action" in script.text
 
 
 def discovery_client(tmp_path) -> TestClient:

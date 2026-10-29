@@ -227,6 +227,11 @@ button:disabled { opacity: .55; cursor: wait; }
 .confidence-medium { border-color: #e4bb62; color: #8b5a09; }
 .confidence-low { border-color: #db978e; color: #a34238; }
 .confidence-unknown { border-color: #9cacc2; color: #51637b; }
+.next-best-action { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem; border: 1px solid #9fcfc4; border-radius: .9rem; background: #f2faf8; }
+.next-best-action h4, .next-best-action p { margin: 0; }
+.next-best-action h4 { margin-top: .15rem; }
+.next-best-action p:not(.eyebrow) { margin-top: .35rem; color: #4f665e; }
+.next-best-action button { flex: 0 0 auto; }
 .deal-delete-button { margin-left: auto; min-height: 30px; padding: 0 10px; border: 1px solid #edc7c2; border-radius: 8px; background: #fff7f6; color: var(--red); font-size: 11px; font-weight: 750; }
 .deal-delete-button:hover { background: #f9e4e1; }
 .compare-choice { display: inline-flex; align-items: center; gap: 5px; color: var(--green-dark); font-size: 11px; font-weight: 750; }

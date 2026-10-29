@@ -1148,6 +1148,12 @@ function primaryDealAction(deal) {
   return "Open deal review";
 }
 
+function nextBestActionPanel(deal) {
+  const action = deal.next_best_action;
+  if (!action?.label || !action?.detail || !action?.destination) return "";
+  return `<section class="next-best-action"><div><p class="eyebrow">Next best action</p><h4>${escapeHtml(action.label)}</h4><p>${escapeHtml(action.detail)}</p></div><button type="button" data-next-best-action data-next-destination="${escapeHtml(action.destination)}">${escapeHtml(action.label)}</button></section>`;
+}
+
 function rejectionExplanation(deal) {
   if (deal.status !== "rejected") return "";
   const state = deal.state || {};
@@ -1191,7 +1197,7 @@ function dealCard(deal) {
   card.innerHTML = `
     <div class="result-meta">
       <span>${escapeHtml(property.postal_code || property.city || "")}</span>
-      <span class="status ${meta.cls}">${meta.label}</span>
+      <span class="status ${meta.cls}">${escapeHtml(deal.workflow_label || meta.label)}</span>
       ${rejectionReason ? `<span class="rejection-explanation" title="${escapeHtml(rejectionReason)}">${escapeHtml(rejectionReason)}</span>` : ""}
       ${comparisonMode ? `<label class="compare-choice"><input type="checkbox" data-compare-choice ${comparisonThreadIds.has(deal.thread_id) ? "checked" : ""} /> Compare</label>` : ""}
       <button type="button" class="deal-delete-button" aria-label="Delete this deal">Delete</button>
@@ -1212,6 +1218,7 @@ function dealCard(deal) {
       <div class="deal-links">${dealLinks}</div>
       ${comparablePanelHTML(state.comparable_selections || [])}
       ${propertyMetrics(property)}
+      ${nextBestActionPanel(deal)}
       ${evidenceConfidencePanel(analysis)}
       ${scoreExplanationPanel(analysis)}
       ${valuationPanel(state)}
@@ -1268,6 +1275,16 @@ function dealCard(deal) {
     event.currentTarget.textContent = opening ? "⌃" : "⌄";
     event.currentTarget.setAttribute("aria-label", label);
     event.currentTarget.title = label;
+  });
+  card.querySelector("[data-next-best-action]")?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const destination = event.currentTarget.dataset.nextDestination;
+    if (!["analyze", "contact", "financials", "documents"].includes(destination)) return;
+    activeDealTab = destination;
+    localStorage.setItem("propertyscout-active-deal-tab", activeDealTab);
+    showDealWorkspace();
+    renderDashboard(Array.from(dealsByThreadId.values()));
+    dashboardSection.scrollIntoView({ behavior: "smooth", block: "start" });
   });
   card.querySelector("[data-compare-choice]")?.addEventListener("change", (event) => {
     if (event.target.checked) {
