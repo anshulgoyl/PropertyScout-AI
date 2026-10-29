@@ -553,8 +553,13 @@ main { width: min(1540px, calc(100% - 294px)); margin-left: 270px; padding-top: 
 .document-checklist { padding: 19px 20px; border-color: #d4e8dc; box-shadow: 0 5px 15px rgba(17, 64, 45, .035); }
 .document-checklist h4 { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; color: var(--green-dark); }
 .document-checklist h4::before { content: "✓"; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: #e3f5ec; color: var(--green-dark); font-size: 12px; }
-.document-checklist li { grid-template-columns: 20px minmax(0, 1fr) 54px; gap: 9px; min-height: 25px; }
-.document-checklist li span:nth-child(2) { color: #44544d; font-weight: 650; }
+.document-checklist-critical { border-color: #ebc97f; background: #fffdf8; }
+.document-checklist-critical h4 { color: #8a5712; }
+.document-checklist-critical h4::before { content: "!"; background: #fff0cf; color: #8a5712; }
+.document-checklist li { grid-template-columns: 20px minmax(0, 1fr) 54px; gap: 9px; min-height: 36px; align-items: start; }
+.document-checklist li span:nth-child(2) { display: grid; gap: 3px; color: #44544d; font-weight: 650; }
+.document-checklist li span:nth-child(2) b { font-weight: 750; }
+.document-checklist li span:nth-child(2) em { color: var(--muted); font-size: 11px; font-style: normal; font-weight: 500; line-height: 1.35; }
 .document-checklist li small { padding: 3px 6px; border-radius: 99px; text-align: center; background: #fff6e8; }
 .document-checklist li.uploaded small { background: #e5f6ed; }
 .document-upload-panel { position: sticky; top: 78px; gap: 16px; padding: 22px; border-color: #b9decd; border-top: 3px solid var(--green); box-shadow: 0 10px 28px rgba(16, 70, 47, .08); }

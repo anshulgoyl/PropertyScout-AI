@@ -1453,16 +1453,16 @@ function wireComparablePanel(card, stage, comparableCount) {
 }
 
 const STANDARD_PURCHASE_DOCUMENTS = [
-  ["Land-register extract", ["grundbuch", "land register"]],
-  ["Draft purchase contract", ["kaufvertrag", "purchase contract", "vertragsentwurf"]],
-  ["Energy certificate", ["energieausweis", "energy certificate"]],
-  ["Floor plan", ["grundriss", "floor plan"]],
-  ["Living-area calculation", ["wohnflaeche", "wohnfläche", "living area"]],
-  ["Building description", ["baubeschreibung", "building description", "expose", "exposé"]],
-  ["Renovation and maintenance evidence", ["sanierung", "modernisierung", "renovierung", "instandhaltung"]],
-  ["Building-insurance evidence", ["versicherung", "insurance"]],
-  ["Property handover record", ["uebergabe", "übergabe", "handover"]],
-  ["Proof of ownership and seller authority", ["vollmacht", "power of attorney", "eigentum"]],
+  { group: "Critical before an offer", label: "Land-register extract", keywords: ["grundbuch", "land register"], purpose: "Confirms ownership, registered rights, and encumbrances." },
+  { group: "Critical before an offer", label: "Draft purchase contract", keywords: ["kaufvertrag", "purchase contract", "vertragsentwurf"], purpose: "Lets you review the proposed obligations before you commit." },
+  { group: "Critical before an offer", label: "Energy certificate", keywords: ["energieausweis", "energy certificate"], purpose: "Supports your energy-cost and renovation-risk assessment." },
+  { group: "Needed for financing", label: "Floor plan", keywords: ["grundriss", "floor plan"], purpose: "Helps verify the layout and usable space you are financing." },
+  { group: "Needed for financing", label: "Living-area calculation", keywords: ["wohnflaeche", "wohnfläche", "living area"], purpose: "Confirms the stated area behind the price-per-square-metre calculation." },
+  { group: "Needed for financing", label: "Building-insurance evidence", keywords: ["versicherung", "insurance"], purpose: "Shows how the building is insured and what may need clarification." },
+  { group: "Due diligence", label: "Building description", keywords: ["baubeschreibung", "building description", "expose", "exposé"], purpose: "Records the stated condition, construction, and included features." },
+  { group: "Due diligence", label: "Renovation and maintenance evidence", keywords: ["sanierung", "modernisierung", "renovierung", "instandhaltung"], purpose: "Helps you separate completed work from upcoming capital costs." },
+  { group: "Due diligence", label: "Property handover record", keywords: ["uebergabe", "übergabe", "handover"], purpose: "Clarifies condition, meters, and handover responsibilities." },
+  { group: "Due diligence", label: "Proof of ownership and seller authority", keywords: ["vollmacht", "power of attorney", "eigentum"], purpose: "Helps confirm that the seller or representative can act for the property." },
 ];
 
 function normalizedDocumentName(value) {
@@ -1501,13 +1501,25 @@ function listingSpecificDocuments(deal) {
   return requirements.slice(0, 10);
 }
 
-function documentChecklistMarkup(title, requirements, files) {
+function documentChecklistMarkup(title, requirements, files, className = "") {
   const uploadedNames = files.map((file) => normalizedDocumentName(file.name));
-  const rows = requirements.map(([label, keywords]) => {
+  const rows = requirements.map((item) => {
+    const [label, keywords] = Array.isArray(item) ? item : [item.label, item.keywords];
+    const purpose = Array.isArray(item) ? "Confirm this document with the broker before you commit." : item.purpose;
     const uploaded = keywords.some((keyword) => uploadedNames.some((name) => name.includes(normalizedDocumentName(keyword))));
-    return `<li class="${uploaded ? "uploaded" : "missing"}"><span aria-hidden="true">${uploaded ? "✓" : "○"}</span><span>${escapeHtml(label)}</span><small>${uploaded ? "Uploaded" : "Request"}</small></li>`;
+    return `<li class="${uploaded ? "uploaded" : "missing"}"><span aria-hidden="true">${uploaded ? "✓" : "○"}</span><span><b>${escapeHtml(label)}</b><em>Why it matters: ${escapeHtml(purpose)}</em></span><small>${uploaded ? "Uploaded" : "Request"}</small></li>`;
   }).join("");
-  return `<section class="document-checklist"><h4>${escapeHtml(title)}</h4><ul>${rows}</ul></section>`;
+  return `<section class="document-checklist ${escapeHtml(className)}"><h4>${escapeHtml(title)}</h4><ul>${rows}</ul></section>`;
+}
+
+function standardDocumentChecklistMarkup(files) {
+  const groups = ["Critical before an offer", "Needed for financing", "Due diligence"];
+  return groups.map((group) => documentChecklistMarkup(
+    group,
+    STANDARD_PURCHASE_DOCUMENTS.filter((document) => document.group === group),
+    files,
+    group === "Critical before an offer" ? "document-checklist-critical" : "",
+  )).join("");
 }
 
 dealGrid.addEventListener("click", async (event) => {
@@ -1706,10 +1718,10 @@ function renderDashboard(deals, { showWorkspace = true } = {}) {
       const result = await response.json().catch(() => ({}));
       const files = result.files || [];
       const deal = eligibleDocumentDeals.find((item) => item.thread_id === selectedDocumentDeal());
-      documentChecklists().innerHTML = `${documentChecklistMarkup("Standard documents for every purchase", STANDARD_PURCHASE_DOCUMENTS, files)}${documentChecklistMarkup("Documents to request for this listing", listingSpecificDocuments(deal || {}), files)}`;
+      documentChecklists().innerHTML = `${standardDocumentChecklistMarkup(files)}${documentChecklistMarkup("Due diligence for this listing", listingSpecificDocuments(deal || {}), files)}`;
       documentInventory().innerHTML = files.length
-        ? `<strong>Uploaded documents</strong><ul>${files.map((file) => `<li>${escapeHtml(file.name)} <span>${Number(file.bytes).toLocaleString()} bytes</span></li>`).join("")}</ul>`
-        : "<p>No documents saved for this property yet.</p>";
+        ? `<strong>Received & reviewed</strong><p>${files.length} document${files.length === 1 ? "" : "s"} saved for this property. Uploaded checklist items are marked on the left.</p><ul>${files.map((file) => `<li>${escapeHtml(file.name)} <span>${Number(file.bytes).toLocaleString()} bytes</span></li>`).join("")}</ul>`
+        : "<strong>Received & reviewed</strong><p>No documents saved for this property yet. Ask the broker for the critical items first.</p>";
     };
     dealGrid.querySelector("[data-document-upload]")?.addEventListener("click", async () => {
       const files = dealGrid.querySelector("[data-document-files]").files;
