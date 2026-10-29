@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from propertyscout.api import (
+    _property_fact_origin,
     _pdf_import_listing,
     create_app,
     derive_workflow_status,
@@ -104,6 +105,7 @@ def test_pdf_import_listing_extracts_plainly_stated_property_facts() -> None:
     assert listing.living_area_sqm == 65.5
     assert listing.energy_class == "E"
     assert str(listing.listing_url) == "https://example.com/listing/42"
+    assert _property_fact_origin(listing.model_dump(mode="json")) == "Uploaded document"
 
 
 def test_pdf_import_listing_accepts_labelled_purchase_price_without_currency() -> None:

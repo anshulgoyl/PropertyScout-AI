@@ -485,6 +485,16 @@ def present_workflow(
     )
 
 
+def _property_fact_origin(property_data: dict[str, Any]) -> str:
+    """Describe the primary evidence source without overstating provenance."""
+
+    evidence = property_data.get("evidence") or []
+    source_names = " ".join(str(item.get("source_name", "")) for item in evidence if isinstance(item, dict)).casefold()
+    if "uploaded" in source_names and "pdf" in source_names:
+        return "Uploaded document"
+    return "From listing"
+
+
 def _deal_view(graph, thread_id: str) -> DealView:
     snapshot = graph.get_state(_config(thread_id))
     if not snapshot.values:
@@ -511,13 +521,14 @@ def _deal_view(graph, thread_id: str) -> DealView:
     property_data = state.get("property") or {}
     analysis = state.get("analysis") or {}
     valuation = analysis.get("valuation") or {}
+    property_origin = _property_fact_origin(property_data)
     evidence_summary = [
-        {"field": "asking price", "origin": "From listing" if property_data.get("asking_price") else "Needs confirmation"},
-        {"field": "living area", "origin": "From listing" if property_data.get("living_area_sqm") else "Needs confirmation"},
-        {"field": "rooms", "origin": "From listing" if property_data.get("room_count") else "Needs confirmation"},
-        {"field": "build year", "origin": "From listing" if property_data.get("build_year") else "Needs confirmation"},
-        {"field": "energy class", "origin": "From listing" if property_data.get("energy_class") else "Needs confirmation"},
-        {"field": "annual rent", "origin": "From listing" if property_data.get("annual_rent") else "Needs confirmation"},
+        {"field": "asking price", "origin": property_origin if property_data.get("asking_price") else "Needs confirmation"},
+        {"field": "living area", "origin": property_origin if property_data.get("living_area_sqm") else "Needs confirmation"},
+        {"field": "rooms", "origin": property_origin if property_data.get("room_count") else "Needs confirmation"},
+        {"field": "build year", "origin": property_origin if property_data.get("build_year") else "Needs confirmation"},
+        {"field": "energy class", "origin": property_origin if property_data.get("energy_class") else "Needs confirmation"},
+        {"field": "annual rent", "origin": property_origin if property_data.get("annual_rent") else "Needs confirmation"},
         {"field": "market valuation", "origin": "Comparable estimate" if valuation.get("estimated_market_value") else "Needs confirmation"},
     ]
     return DealView(
