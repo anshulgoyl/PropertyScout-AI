@@ -121,6 +121,7 @@ class DealView(BaseModel):
     diagnostic: dict[str, Any] | None = None
     workflow_label: str = "Ready to Analyze"
     next_best_action: "NextBestAction | None" = None
+    evidence_summary: list[dict[str, str]] = Field(default_factory=list)
 
 
 class NextBestAction(BaseModel):
@@ -507,6 +508,18 @@ def _deal_view(graph, thread_id: str) -> DealView:
         pending_approval_type,
         next_nodes,
     )
+    property_data = state.get("property") or {}
+    analysis = state.get("analysis") or {}
+    valuation = analysis.get("valuation") or {}
+    evidence_summary = [
+        {"field": "asking price", "origin": "From listing" if property_data.get("asking_price") else "Needs confirmation"},
+        {"field": "living area", "origin": "From listing" if property_data.get("living_area_sqm") else "Needs confirmation"},
+        {"field": "rooms", "origin": "From listing" if property_data.get("room_count") else "Needs confirmation"},
+        {"field": "build year", "origin": "From listing" if property_data.get("build_year") else "Needs confirmation"},
+        {"field": "energy class", "origin": "From listing" if property_data.get("energy_class") else "Needs confirmation"},
+        {"field": "annual rent", "origin": "From listing" if property_data.get("annual_rent") else "Needs confirmation"},
+        {"field": "market valuation", "origin": "Comparable estimate" if valuation.get("estimated_market_value") else "Needs confirmation"},
+    ]
     return DealView(
         thread_id=thread_id,
         state=state,
@@ -517,6 +530,7 @@ def _deal_view(graph, thread_id: str) -> DealView:
         diagnostic=diagnostic,
         workflow_label=presentation.label,
         next_best_action=presentation.next_action,
+        evidence_summary=evidence_summary,
     )
 
 

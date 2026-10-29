@@ -584,6 +584,12 @@ main { width: min(1540px, calc(100% - 294px)); margin-left: 270px; padding-top: 
 .document-results section { display: grid; gap: 5px; padding-bottom: 10px; border-bottom: 1px solid #e4eee8; }
 .document-results section:last-of-type { border-bottom: 0; padding-bottom: 0; }
 .document-results strong { color: var(--ink); }
+.evidence-ledger { padding:16px; border:1px solid #d7e5ee; border-radius:10px; background:#f8fbfd; }
+.evidence-ledger h4 { margin:0 0 10px; font-size:14px; }
+.evidence-ledger dl { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:0; }
+.evidence-ledger dl div { display:flex; justify-content:space-between; gap:8px; padding:7px 9px; border-radius:6px; background:#fff; font-size:11px; }
+.evidence-ledger dt { color:var(--muted); text-transform:capitalize; }
+.evidence-ledger dd { margin:0; color:var(--ink); font-weight:750; text-align:right; }
 .document-upload-panel small { color: var(--muted); font-size: 11px; line-height: 1.45; }
 .print-summary-button { margin-left: auto; }
 

@@ -1189,6 +1189,12 @@ function nextBestActionPanel(deal) {
   return `<section class="next-best-action"><div><p class="eyebrow">Next best action</p><h4>${escapeHtml(action.label)}</h4><p>${escapeHtml(action.detail)}</p></div><button type="button" data-next-best-action data-next-destination="${escapeHtml(action.destination)}">${escapeHtml(action.label)}</button></section>`;
 }
 
+function evidenceLedgerPanel(deal) {
+  const items = deal.evidence_summary || [];
+  if (!items.length) return "";
+  return `<section class="evidence-ledger"><p class="eyebrow">Evidence ledger</p><h4>Where the key facts come from</h4><dl>${items.map((item) => `<div><dt>${escapeHtml(item.field)}</dt><dd>${escapeHtml(item.origin)}</dd></div>`).join("")}</dl></section>`;
+}
+
 function rejectionExplanation(deal) {
   if (deal.status !== "rejected") return "";
   const state = deal.state || {};
@@ -1254,6 +1260,7 @@ function dealCard(deal) {
       ${comparablePanelHTML(state.comparable_selections || [])}
       ${propertyMetrics(property)}
       ${nextBestActionPanel(deal)}
+      ${evidenceLedgerPanel(deal)}
       ${evidenceConfidencePanel(analysis)}
       ${scoreExplanationPanel(analysis)}
       ${valuationPanel(state)}

@@ -61,6 +61,9 @@ def test_deal_api_exposes_analysis_confidence_and_five_score_drivers(tmp_path) -
         "building_energy_risk",
         "data_completeness",
     ]
+    evidence = created["evidence_summary"]
+    assert any(item["field"] == "asking price" and item["origin"] == "From listing" for item in evidence)
+    assert any(item["field"] == "market valuation" and item["origin"] == "Comparable estimate" for item in evidence)
 
 
 def test_document_review_separates_matches_gaps_and_contract_questions(tmp_path) -> None:
@@ -577,8 +580,8 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert 'id="discovery-grid"' in page.text
     assert 'id="refresh-discoveries"' in page.text
     assert 'id="clear-discoveries"' in page.text
-    assert 'app.js?v=20261029-18' in page.text
-    assert 'styles.css?v=20261029-11' in page.text
+    assert 'app.js?v=20261029-19' in page.text
+    assert 'styles.css?v=20261029-12' in page.text
 
     script = client.get("/app/app.js")
     assert script.status_code == 200
@@ -608,6 +611,7 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert "Next action" in script.text
     assert "Print deal summary" in script.text
     assert "See this in your selected deal" in script.text
+    assert "Evidence ledger" in script.text
 
     styles = client.get("/app/styles.css")
     assert styles.status_code == 200
