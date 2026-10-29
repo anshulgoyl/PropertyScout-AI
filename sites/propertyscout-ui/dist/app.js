@@ -2233,8 +2233,6 @@ async function startDiscoveryDeal(card, url) {
   const button = card.querySelector(".analyze-button");
   cardError.hidden = true;
   if (button) button.disabled = true;
-  focusedWorkflowThreadId = null;
-  updateWorkflowStage("analysis");
   const send = (body) =>
     fetch(`/discoveries/${currentSearchId}/deals`, {
       method: "POST",
@@ -2244,9 +2242,8 @@ async function startDiscoveryDeal(card, url) {
   try {
     const response = await send({ url, criteria: requestFromForm() });
     if (!response.ok) throw new Error(await readError(response));
-    const createdDeal = await response.json();
-    focusWorkflowDeal(createdDeal);
-    cardError.textContent = "Analysis workflow started — see it in your deals below.";
+    await response.json();
+    cardError.textContent = "Added to Analyze — you can keep reviewing this search.";
     cardError.hidden = false;
     await loadDeals();
   } catch (error) {
