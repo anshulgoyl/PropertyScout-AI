@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
+import json
 import os
+import re
+import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 from uuid import NAMESPACE_URL, uuid4, uuid5
+from xml.etree import ElementTree
 
-from fastapi import FastAPI, HTTPException, Response, status
+from fastapi import FastAPI, File, HTTPException, Response, UploadFile, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from langchain_keenable import KeenableFetch, KeenableSearch
 from langgraph.types import Command
 from pydantic import BaseModel, Field, SecretStr
+from pypdf import PdfReader
 
 from propertyscout.analyst import (
     build_market_basis,
@@ -30,6 +35,7 @@ from propertyscout.config import (
     llm_enabled_from_env,
     search_query_limit_from_env,
 )
+from propertyscout.contact_research import ListingPageContactResearchService, enrich_listing_features
 from propertyscout.discovery import (
     DiscoveryRecord,
     DiscoveryService,
@@ -56,7 +62,11 @@ from propertyscout.schemas import (
     Money,
     PropertyCondition,
     PropertyListing,
+    SourceEvidence,
 )
+
+
+MAX_PDF_IMPORT_KEENABLE_CREDITS = 10
 
 
 class StartDealRequest(BaseModel):
@@ -142,6 +152,7 @@ class DiscoveryRunSummary(BaseModel):
     search_calls: int = 0
     index_fetches: int = 0
     detail_fetches: int = 0
+    keenable_credits_used: int | None = None
     cross_query_duplicates: int = 0
     search_errors: list[str] = Field(default_factory=list)
     csv_path: str = ""
@@ -170,6 +181,132 @@ MIN_COMP_COUNT = 8
 MAX_COMP_QUERIES = 3
 NEARBY_POSTCODE_LIMIT = 5
 NEARBY_POSTCODE_RADIUS_KM = 25.0
+
+
+def _document_text(path: Path) -> str:
+    """Extract locally available text without sending a broker document elsewhere."""
+
+    suffix = path.suffix.casefold()
+    if suffix == ".txt":
+        return path.read_text(encoding="utf-8", errors="replace")
+    if suffix == ".pdf":
+        reader = PdfReader(path)
+        return "\n".join(page.extract_text() or "" for page in reader.pages)
+    if suffix == ".docx":
+        with zipfile.ZipFile(path) as archive:
+            root = ElementTree.fromstring(archive.read("word/document.xml"))
+        paragraphs = ["".join(paragraph.itertext()).strip() for paragraph in root.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p")]
+        return "\n".join(paragraph for paragraph in paragraphs if paragraph)
+    return ""
+
+
+_PURCHASE_PRICE_LABEL = re.compile(
+    r"(?:kaufpreis|kaufprice|purchase\s*price|asking\s*price)",
+    re.IGNORECASE,
+)
+_PDF_MONEY_AMOUNT = re.compile(r"\b(?:\d{1,3}(?:[.\s]\d{3})+|\d{5,7})(?:,\d{2})?\b")
+
+
+def _pdf_purchase_price(text: str) -> float | None:
+    """Return the first plausible amount immediately following a price label.
+
+    PDF text often places the total price beside a lower €/m² figure. Searching
+    for a currency symbol across the complete document can therefore select the
+    latter. Keep the match local to the explicit purchase-price label instead.
+    """
+
+    for label in _PURCHASE_PRICE_LABEL.finditer(text):
+        window = text[label.end():label.end() + 180]
+        for amount in _PDF_MONEY_AMOUNT.finditer(window):
+            raw = amount.group(0).replace(" ", "")
+            if "," in raw:
+                raw = raw.replace(".", "").replace(",", ".")
+            else:
+                raw = raw.replace(".", "")
+            value = float(raw)
+            if 10_000 <= value <= 50_000_000:
+                return value
+    return None
+
+
+def _document_facts(text: str) -> dict[str, Any]:
+    """Read only plainly stated facts; uncertain matches remain absent."""
+
+    compact = " ".join(text.split())
+    facts: dict[str, Any] = {}
+    price = _pdf_purchase_price(text)
+    if price is not None:
+        facts["price_eur"] = price
+    area = re.search(r"(?:wohn(?:fläche)?|fläche|wohnraum)\D{0,20}([0-9]{1,4}(?:,[0-9]{1,2})?)\s*(?:m²|qm|m2)", compact, re.IGNORECASE)
+    if area:
+        facts["area_sqm"] = float(area.group(1).replace(",", "."))
+    energy = re.search(r"(?:energie(?:ausweis|effizienzklasse|klasse)?)\D{0,24}\b([A-G])\b", compact, re.IGNORECASE)
+    if energy:
+        facts["energy_class"] = energy.group(1).upper()
+    rent = re.search(r"(?:kaltmiete|nettokaltmiete)\D{0,24}([0-9][0-9. ]{1,}(?:,[0-9]{2})?)\s*(?:€|eur)", compact, re.IGNORECASE)
+    if rent:
+        facts["monthly_rent_eur"] = float(rent.group(1).replace(".", "").replace(" ", "").replace(",", "."))
+    return facts
+
+
+def _pdf_import_listing(text: str, filename: str) -> PropertyListing:
+    """Build a cautious analysis candidate from plainly stated PDF facts."""
+
+    compact = " ".join(text.split())
+    facts = _document_facts(text)
+    if "price_eur" not in facts:
+        raise HTTPException(
+            status_code=422,
+            detail="The PDF needs a clearly stated purchase price before it can enter Analyze.",
+        )
+    rooms = re.search(r"\b(\d+(?:[,.]\d+)?)\s*(?:zimmer|rooms?)\b", compact, re.IGNORECASE)
+    area = re.search(r"\b(\d+(?:[,.]\d+)?)\s*(?:m²|m2|qm)\b", compact, re.IGNORECASE)
+    postcode = re.search(r"\b(\d{5})\b", compact)
+    city = re.search(r"\b(Köln|Koeln|Cologne|Düsseldorf|Duesseldorf|Dusseldorf|Essen|München|Muenchen|Munich)\b", compact, re.IGNORECASE)
+    url = re.search(r"https?://[^\s<>()]+", text)
+    first_line = next((line.strip() for line in text.splitlines() if len(line.strip()) > 12), "")
+    title = first_line[:160] or Path(filename).stem.replace("_", " ")
+    property_type = "house" if re.search(r"\bhaus\b|\bhouse\b", compact, re.IGNORECASE) else "apartment"
+    return PropertyListing(
+        property_id=uuid4(),
+        source_listing_id=f"pdf-import-{uuid4().hex}",
+        title=title,
+        city=city.group(1) if city else "Location to confirm",
+        postal_code=postcode.group(1) if postcode else None,
+        country_code="DE",
+        property_type=property_type,
+        asking_price=Money(amount=facts["price_eur"], currency="EUR"),
+        living_area_sqm=float(area.group(1).replace(",", ".")) if area else None,
+        room_count=float(rooms.group(1).replace(",", ".")) if rooms else None,
+        annual_rent=Money(amount=facts["monthly_rent_eur"] * 12, currency="EUR") if "monthly_rent_eur" in facts else None,
+        energy_class=facts.get("energy_class"),
+        description=compact[:4_000],
+        listing_url=url.group(0).rstrip(".,;") if url else None,
+        evidence=[
+            SourceEvidence(
+                source_name="uploaded property PDF",
+                retrieved_at=datetime.now(UTC),
+                excerpt=compact[:30_000],
+            )
+        ],
+        missing_fields=[field for field, value in (("living area", area), ("rooms", rooms), ("location", city)) if not value],
+    )
+
+
+def _contract_checklist(text: str) -> list[dict[str, str]]:
+    topics = [
+        ("Property and fixtures", "Ensure the unit, parking/storage rights, and included fixtures are described precisely.", r"(?:wohnung|grundbuch|inventar|stellplatz)"),
+        ("Known defects", "Ask that known defects, repairs, and agreed remedies are written down.", r"(?:mangel|gewährleistung|sachmangel)"),
+        ("Payment and handover", "Confirm payment prerequisites, keys, handover date, and risk transfer.", r"(?:kaufpreis|übergabe|besitzübergang)"),
+        ("Land register and encumbrances", "Clarify which liens, easements, or rights must be removed or remain.", r"(?:grundbuch|lastenfreistellung|dienstbarkeit)"),
+        ("Owners' association", "Check Hausgeld, reserves, planned works, special assessments, and recent minutes.", r"(?:hausgeld|sonderumlage|eigentümerversammlung|instandhaltungsrücklage)"),
+        ("Letting and tenancy", "If occupied, confirm the lease, deposit, rent, and termination constraints.", r"(?:mietvertrag|kaltmiete|mieter|kaution)"),
+        ("Financing condition", "If required, have a financing condition or clear exit arrangement reviewed before signing.", r"(?:finanzierung|darlehen)"),
+    ]
+    return [
+        {"topic": topic, "guidance": guidance, "status": "mentioned" if re.search(pattern, text, re.IGNORECASE) else "check"}
+        for topic, guidance, pattern in topics
+    ]
 
 
 def _config(thread_id: str) -> dict:
@@ -398,6 +535,13 @@ def create_app(
 
     def _run_summary(search_id: str, entry: dict[str, Any]) -> DiscoveryRunSummary:
         diagnostics = entry["diagnostics"]
+        # Each Keenable search or fetch consumes one request credit. Keep the
+        # total with the run so the user can audit it after a restart.
+        credits_used = (
+            diagnostics["search_calls"]
+            + diagnostics["index_fetches"]
+            + diagnostics["detail_fetches"]
+        ) if entry.get("usage_recorded") else None
         return DiscoveryRunSummary(
             search_id=search_id,
             created_at=entry["created_at"],
@@ -405,6 +549,7 @@ def create_app(
             search_calls=diagnostics["search_calls"],
             index_fetches=diagnostics["index_fetches"],
             detail_fetches=diagnostics["detail_fetches"],
+            keenable_credits_used=credits_used,
             cross_query_duplicates=diagnostics["cross_query_duplicates"],
             search_errors=list(diagnostics["search_errors"]),
             csv_path=str(entry["csv_path"]) if entry.get("csv_path") else "",
@@ -415,20 +560,52 @@ def create_app(
         path = discovery_dir / f"discovery_{search_id}.csv"
         write_csv(entry["records"], path)
         entry["csv_path"] = path
+        path.with_suffix(".meta.json").write_text(
+            json.dumps(
+                {
+                    "created_at": entry["created_at"],
+                    "diagnostics": entry["diagnostics"],
+                    "usage_recorded": True,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
         return path
 
     def _hydrated_entry(path: Path) -> dict[str, Any]:
+        diagnostics = {
+            "search_calls": 0,
+            "index_fetches": 0,
+            "detail_fetches": 0,
+            "cross_query_duplicates": 0,
+            "search_errors": [],
+        }
+        created_at = datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat()
+        usage_recorded = False
+        try:
+            metadata = json.loads(
+                path.with_suffix(".meta.json").read_text(encoding="utf-8")
+            )
+            stored_diagnostics = metadata.get("diagnostics", {})
+            diagnostics.update(
+                {
+                    key: stored_diagnostics.get(key, default)
+                    for key, default in diagnostics.items()
+                }
+            )
+            created_at = metadata.get("created_at", created_at)
+            usage_recorded = bool(metadata.get("usage_recorded", False))
+        except (OSError, TypeError, ValueError):
+            # Older inventories do not have usage metadata, so avoid guessing.
+            pass
         return {
             "records": read_inventory(path),
             "criteria": None,
-            "diagnostics": {
-                "search_calls": 0,
-                "index_fetches": 0,
-                "detail_fetches": 0,
-                "cross_query_duplicates": 0,
-                "search_errors": [],
-            },
-            "created_at": datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat(),
+            "diagnostics": diagnostics,
+            "usage_recorded": usage_recorded,
+            "created_at": created_at,
             "csv_path": path,
         }
 
@@ -511,6 +688,129 @@ def create_app(
             return _deal_view(graph, thread_id)
 
     @application.post(
+        "/deals/import-pdf",
+        response_model=DealView,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def import_property_pdf(file: UploadFile = File(...)) -> DealView:
+        """Add a PDF exposé to Analyze and enrich it with tightly bounded web evidence."""
+
+        filename = Path(file.filename or "property.pdf").name
+        if Path(filename).suffix.casefold() != ".pdf":
+            raise HTTPException(status_code=415, detail="Upload a PDF property exposé.")
+        payload = await file.read()
+        if not payload or len(payload) > 20 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="The PDF must be between 1 byte and 20 MB.")
+
+        import_path = database_path.parent / "pdf-imports" / f"{uuid4()}-{filename}"
+        import_path.parent.mkdir(parents=True, exist_ok=True)
+        import_path.write_bytes(payload)
+        try:
+            text = _document_text(import_path)
+        except Exception as exc:  # noqa: BLE001 - malformed PDFs are user-facing input errors
+            raise HTTPException(status_code=422, detail=f"Could not read this PDF: {exc}") from exc
+        if not text.strip():
+            raise HTTPException(status_code=422, detail="No readable text was found in this PDF.")
+
+        property_listing = _pdf_import_listing(text, filename)
+        online_evidence: list[SourceEvidence] = []
+        online_text = ""
+        calls = 0
+        try:
+            listing_url = str(property_listing.listing_url or "")
+            if listing_url:
+                calls += 1
+                fetched = KeenableFetch(api_key=SecretStr(""), timeout=30).invoke({"url": listing_url})
+                online_text = str(fetched.get("content") or "") if isinstance(fetched, dict) else str(fetched)
+                if online_text:
+                    online_evidence.append(SourceEvidence(source_name="Keenable PDF-import listing fetch", url=listing_url, retrieved_at=datetime.now(UTC), excerpt=online_text[:30_000]))
+            else:
+                calls += 1
+                query = f"{property_listing.title} {property_listing.city} kaufen immobilie"
+                results = KeenableSearch(timeout=30).invoke({"query": query})
+                candidate = next((item for item in results if isinstance(item, dict)), None) if isinstance(results, list) else None
+                if candidate:
+                    snippet = str(candidate.get("snippet") or candidate.get("description") or "")
+                    candidate_url = str(candidate.get("url") or "")
+                    online_text = snippet
+                    if snippet:
+                        online_evidence.append(SourceEvidence(source_name="Keenable PDF-import search", url=candidate_url or None, retrieved_at=datetime.now(UTC), excerpt=snippet[:10_000]))
+                    if candidate_url and calls < MAX_PDF_IMPORT_KEENABLE_CREDITS:
+                        calls += 1
+                        fetched = KeenableFetch(api_key=SecretStr(""), timeout=30).invoke({"url": candidate_url})
+                        detail = str(fetched.get("content") or "") if isinstance(fetched, dict) else str(fetched)
+                        if detail:
+                            online_text = f"{online_text}\n{detail}"
+                            online_evidence.append(SourceEvidence(source_name="Keenable PDF-import listing fetch", url=candidate_url, retrieved_at=datetime.now(UTC), excerpt=detail[:30_000]))
+        except Exception:
+            # Online research is helpful but must never prevent a local PDF from entering Analyze.
+            pass
+
+        if online_text:
+            property_listing = enrich_listing_features(property_listing, online_text)
+        property_listing = property_listing.model_copy(update={"evidence": [*property_listing.evidence, *online_evidence]})
+        criteria = InvestmentCriteria(
+            locations=[property_listing.city],
+            postal_codes=[property_listing.postal_code] if property_listing.postal_code else [],
+            maximum_purchase_price=Money(amount=property_listing.asking_price.amount * 1.2, currency="EUR"),
+            property_types=[property_listing.property_type],
+            strategy="buy_to_let",
+        )
+        # A PDF-imported property has no discovery inventory to reuse. Build a
+        # comparable pool with a dedicated, hard-capped service: at most three
+        # search calls and four detail fetches. Together with the two-call PDF
+        # research above, this stays below the ten-credit import budget.
+        comparable_selections: list[ComparableSelection] = []
+        market_basis = None
+        can_search_comparables = (
+            property_listing.city != "Location to confirm"
+            and property_listing.living_area_sqm is not None
+            and property_listing.room_count is not None
+        )
+        if can_search_comparables:
+            try:
+                pdf_comparable_search = KeenableListingSearchService(
+                    detail_fetch_limit=4,
+                    search_query_limit=3,
+                )
+                comparables = pdf_comparable_search.search_comps(
+                    criteria, MIN_COMP_COUNT, MAX_COMP_QUERIES
+                )
+                market_basis = build_market_basis(
+                    comparables,
+                    criteria,
+                    exclude_urls={str(property_listing.listing_url)} if property_listing.listing_url else set(),
+                )
+                comparable_selections = [
+                    ComparableSelection(
+                        listing=comparable,
+                        source="pdf_import_comparable_search",
+                        rank=rank,
+                        selection_reason="Comparable found for PDF-imported property",
+                    )
+                    for rank, comparable in enumerate(comparables, start=1)
+                ]
+            except Exception:
+                # The document is still useful even when a market search is not.
+                comparable_selections = []
+                market_basis = None
+        thread_id = str(uuid4())
+        document_target = database_path.parent / "documents" / thread_id
+        document_target.mkdir(parents=True, exist_ok=True)
+        (document_target / filename).write_bytes(payload)
+        with open_sqlite_graph(database_path, **graph_options) as graph:
+            graph.invoke(
+                initial_state_for_listing(
+                    property_listing,
+                    criteria,
+                    market_basis=market_basis,
+                    comparable_selections=comparable_selections,
+                ),
+                _config(thread_id),
+            )
+            return _deal_view(graph, thread_id)
+
+    @application.post(
         "/searches",
         response_model=SearchView,
         status_code=status.HTTP_201_CREATED,
@@ -574,6 +874,7 @@ def create_app(
             "records": run.records,
             "criteria": criteria,
             "diagnostics": diagnostics,
+            "usage_recorded": True,
             "created_at": datetime.now(UTC).isoformat(),
             "csv_path": None,
         }
@@ -595,6 +896,102 @@ def create_app(
         with open_sqlite_graph(database_path, **graph_options) as graph:
             return _deal_view(graph, thread_id)
 
+    @application.post("/deals/{thread_id}/enrich-contact", response_model=DealView)
+    def enrich_contact_listing(thread_id: str) -> DealView:
+        """Fetch one selected listing page for richer contact and feature evidence.
+
+        This endpoint is deliberately user-triggered and records its completion,
+        so refreshes cannot spend additional Keyless credits. One detail fetch is
+        used (well below the five-credit per-listing limit).
+        """
+
+        with open_sqlite_graph(database_path, **graph_options) as graph:
+            snapshot = graph.get_state(_config(thread_id))
+            if not snapshot.values:
+                raise HTTPException(status_code=404, detail="Deal thread not found")
+            property_listing: PropertyListing = snapshot.values["property"]
+            saved_enrichment = [
+                item for item in property_listing.evidence
+                if item.source_name == "keyless_contact_enrichment" and item.excerpt
+            ]
+            if saved_enrichment:
+                # Older one-time refreshes already have the page text. Normalize
+                # those facts locally rather than spending another provider credit.
+                normalized = enrich_listing_features(
+                    property_listing,
+                    "\n".join(str(item.excerpt) for item in saved_enrichment),
+                )
+                if normalized != property_listing:
+                    graph.update_state(_config(thread_id), {"property": normalized})
+                return _deal_view(graph, thread_id)
+            if not property_listing.listing_url:
+                raise HTTPException(status_code=422, detail="This listing has no source URL to enrich")
+            try:
+                result = KeenableFetch(api_key=SecretStr(""), timeout=30).invoke({"url": str(property_listing.listing_url)})
+            except Exception as exc:  # noqa: BLE001 - provider error is reported to the user
+                raise HTTPException(status_code=502, detail=f"Listing enrichment failed: {exc}") from exc
+            content = result.get("content") if isinstance(result, dict) else str(result)
+            if not content:
+                raise HTTPException(status_code=502, detail="Listing enrichment returned no readable content")
+            evidence = SourceEvidence(
+                source_name="keyless_contact_enrichment",
+                url=property_listing.listing_url,
+                retrieved_at=datetime.now(UTC),
+                excerpt=str(content)[:30000],
+            )
+            enriched_property = enrich_listing_features(property_listing, str(content)).model_copy(
+                update={"evidence": [*property_listing.evidence, evidence]}
+            )
+            updates: dict[str, Any] = {"property": enriched_property}
+            candidates = ListingPageContactResearchService().search(enriched_property)
+            if candidates:
+                updates["contact_candidates"] = candidates
+                updates["selected_contact"] = candidates[0]
+            graph.update_state(_config(thread_id), updates)
+            return _deal_view(graph, thread_id)
+
+    @application.post("/deals/{thread_id}/contact-pdf", response_model=DealView)
+    async def enrich_contact_from_pdf(thread_id: str, file: UploadFile = File(...)) -> DealView:
+        """Use a broker/exposé PDF as local evidence for one Contact-stage deal."""
+
+        filename = Path(file.filename or "contact-document.pdf").name
+        if Path(filename).suffix.casefold() != ".pdf":
+            raise HTTPException(status_code=415, detail="Upload a PDF document.")
+        payload = await file.read()
+        if not payload or len(payload) > 20 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="The PDF must be between 1 byte and 20 MB.")
+        with open_sqlite_graph(database_path, **graph_options) as graph:
+            snapshot = graph.get_state(_config(thread_id))
+            if not snapshot.values:
+                raise HTTPException(status_code=404, detail="Deal thread not found")
+            property_listing: PropertyListing = snapshot.values["property"]
+            target = database_path.parent / "documents" / thread_id
+            target.mkdir(parents=True, exist_ok=True)
+            path = target / filename
+            path.write_bytes(payload)
+            try:
+                text = _document_text(path)
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=422, detail=f"Could not read this PDF: {exc}") from exc
+            if not text.strip():
+                raise HTTPException(status_code=422, detail="No readable text was found in this PDF.")
+            evidence = SourceEvidence(
+                source_name="uploaded contact PDF",
+                url=property_listing.listing_url,
+                retrieved_at=datetime.now(UTC),
+                excerpt=text[:30_000],
+            )
+            enriched = enrich_listing_features(property_listing, text).model_copy(
+                update={"evidence": [*property_listing.evidence, evidence]}
+            )
+            updates: dict[str, Any] = {"property": enriched}
+            candidates = ListingPageContactResearchService().search(enriched)
+            if candidates:
+                updates["contact_candidates"] = candidates
+                updates["selected_contact"] = candidates[0]
+            graph.update_state(_config(thread_id), updates)
+            return _deal_view(graph, thread_id)
+
     @application.delete("/deals/{thread_id}", status_code=status.HTTP_204_NO_CONTENT)
     def delete_deal(thread_id: str) -> Response:
         """Permanently remove one local deal from the pipeline."""
@@ -602,6 +999,85 @@ def create_app(
         if not delete_sqlite_thread(database_path, thread_id):
             raise HTTPException(status_code=404, detail="Deal thread not found")
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @application.post("/deals/{thread_id}/documents")
+    async def upload_deal_documents(
+        thread_id: str, files: list[UploadFile] = File(...),
+    ) -> dict[str, list[dict[str, str | int]]]:
+        """Store broker documents locally for a single deal; analysis is separate."""
+
+        if not list_sqlite_thread_ids(database_path) or thread_id not in list_sqlite_thread_ids(database_path):
+            raise HTTPException(status_code=404, detail="Deal not found")
+        allowed = {".pdf", ".doc", ".docx", ".txt", ".jpg", ".jpeg", ".png"}
+        target = database_path.parent / "documents" / thread_id
+        target.mkdir(parents=True, exist_ok=True)
+        saved: list[dict[str, str | int]] = []
+        for upload in files[:10]:
+            name = Path(upload.filename or "document").name
+            if Path(name).suffix.casefold() not in allowed:
+                raise HTTPException(status_code=415, detail=f"Unsupported file: {name}")
+            content = await upload.read()
+            if len(content) > 20 * 1024 * 1024:
+                raise HTTPException(status_code=413, detail=f"File is larger than 20 MB: {name}")
+            (target / name).write_bytes(content)
+            saved.append({"name": name, "bytes": len(content)})
+        return {"files": saved}
+
+    @application.get("/deals/{thread_id}/documents")
+    def list_deal_documents(thread_id: str) -> dict[str, list[dict[str, str | int]]]:
+        target = database_path.parent / "documents" / thread_id
+        if not target.exists():
+            return {"files": []}
+        return {"files": [{"name": path.name, "bytes": path.stat().st_size} for path in sorted(target.iterdir()) if path.is_file()]}
+
+    @application.get("/deals/{thread_id}/documents/{name}/text")
+    def document_text(thread_id: str, name: str) -> dict[str, str]:
+        path = database_path.parent / "documents" / thread_id / Path(name).name
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="Document not found")
+        text = _document_text(path)
+        if text:
+            return {"text": text}
+        return {"text": "No embedded text was found. This appears to be a scan or image; local OCR can be enabled on this machine."}
+
+    @application.get("/deals/{thread_id}/documents/review")
+    def review_deal_documents(thread_id: str) -> dict[str, Any]:
+        """Compare plainly stated local document facts with the saved listing."""
+
+        target = database_path.parent / "documents" / thread_id
+        if not target.exists():
+            raise HTTPException(status_code=404, detail="No documents uploaded for this deal")
+        with open_sqlite_graph(database_path, **graph_options) as graph:
+            deal = _deal_view(graph, thread_id)
+        listing = deal.state.get("property") or {}
+        expected = {
+            "price_eur": listing.get("asking_price", {}).get("amount") if isinstance(listing.get("asking_price"), dict) else listing.get("asking_price"),
+            "area_sqm": listing.get("living_area_sqm"),
+            "energy_class": listing.get("energy_class"),
+        }
+        extracted: list[dict[str, Any]] = []
+        for path in sorted(candidate for candidate in target.iterdir() if candidate.is_file()):
+            text = _document_text(path)
+            extracted.append({"name": path.name, "facts": _document_facts(text), "has_text": bool(text)})
+
+        discrepancies: list[dict[str, str]] = []
+        for document in extracted:
+            for field, document_value in document["facts"].items():
+                listing_value = expected.get(field)
+                if listing_value in (None, "", "not stated"):
+                    continue
+                if field in {"price_eur", "area_sqm"}:
+                    if abs(float(document_value) - float(listing_value)) > (1 if field == "area_sqm" else 100):
+                        discrepancies.append({"document": document["name"], "field": field.replace("_", " "), "listing": str(listing_value), "document_value": str(document_value)})
+                elif str(document_value).upper() != str(listing_value).upper():
+                    discrepancies.append({"document": document["name"], "field": field.replace("_", " "), "listing": str(listing_value), "document_value": str(document_value)})
+        joined_text = "\n".join(_document_text(path) for path in target.iterdir() if path.is_file())
+        return {
+            "documents": extracted,
+            "discrepancies": discrepancies,
+            "contract_checklist": _contract_checklist(joined_text),
+            "notice": "This is a practical review aid, not legal advice. Have the notarial contract reviewed by a qualified professional before signing.",
+        }
 
     @application.post("/deals/{thread_id}/resume", response_model=DealView)
     def resume_deal(thread_id: str, request: ResumeDealRequest) -> DealView:
@@ -643,6 +1119,7 @@ def create_app(
                 raise HTTPException(status_code=400, detail="Invalid discovery inventory path")
             try:
                 csv_path.unlink(missing_ok=True)
+                csv_path.with_suffix(".meta.json").unlink(missing_ok=True)
             except OSError as exc:
                 raise HTTPException(
                     status_code=500, detail="Could not clear discovery inventory"

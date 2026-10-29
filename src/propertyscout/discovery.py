@@ -196,6 +196,40 @@ def is_listing_detail_url(url: str) -> bool:
     return any(pattern.match(path) for pattern in _LISTING_PATHS)
 
 
+def discovery_search_queries(criteria: InvestmentCriteria) -> list[str]:
+    """Return discovery queries with a protected ImmoScout24 exposé share.
+
+    The general market-search query sequence is also used by valuation and
+    comparable workflows, so source-specific discovery targeting belongs here.
+    The primary broad query remains first; the next three queries target only
+    individual ImmoScout24 exposé URLs before the rest of the portal mix runs.
+    """
+
+    location = criteria.locations[0]
+    property_type = criteria.property_types[0]
+    property_term = {
+        "apartment": "Eigentumswohnung",
+        "house": "Haus",
+    }.get(property_type.casefold(), property_type)
+    budget = f"{criteria.maximum_purchase_price.amount:g}"
+    room_term = (
+        f" {criteria.minimum_room_count:g} Zimmer"
+        if criteria.minimum_room_count is not None
+        else ""
+    )
+    direct_immoscout_queries = [
+        f"site:immobilienscout24.de/expose/ {property_term} kaufen {location}",
+        f"site:immobilienscout24.de/expose/ {location}{room_term} kaufen",
+        f"site:immobilienscout24.de/expose/ {location} bis {budget} EUR {property_term}",
+    ]
+    general_queries = search_queries(criteria)
+    return list(
+        dict.fromkeys(
+            [general_queries[0], *direct_immoscout_queries, *general_queries[1:]]
+        )
+    )
+
+
 def extract_listing_links(content: str, base_url: str) -> list[str]:
     """Extract individual listing URLs from a fetched index page.
 
@@ -465,7 +499,7 @@ class DiscoveryService:
         children: list[tuple[str, str]] = []
 
         # Stage 1: authenticated search; every configured query runs.
-        for query in search_queries(criteria)[: self._search_budget]:
+        for query in discovery_search_queries(criteria)[: self._search_budget]:
             run.queries_run.append(query)
             run.search_calls += 1
             try:
@@ -522,6 +556,19 @@ class DiscoveryService:
         run: DiscoveryRun,
     ) -> list[DiscoveryRecord]:
         """Gate a snippet, then route it to an index or detail fetch."""
+
+        # A generic ImmoScout24 domain search commonly returns city/category
+        # pages that mention many properties (and sometimes a different city).
+        # Dedicated ImmoScout queries target `/expose/<id>` URLs, so keep that
+        # contract strict and do not spend a keyless fetch on navigation pages.
+        if detect_portal(url) == "immobilienscout24" and not _IMMOSCOUT_LISTING.match(
+            urlsplit(url).path.rstrip("/")
+        ):
+            return [
+                _rejection_record(
+                    result_title(result), url, ["immo-scout-non-expose-url"]
+                )
+            ]
 
         # Snippets often lack a postal code or a single price, and index
         # candidates only serve as link sources, so candidates are fetched

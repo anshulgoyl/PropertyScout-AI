@@ -174,6 +174,7 @@ class ComparableSelection(StrictModel):
         "validated_discovery_inventory",
         "nearby_postcode_discovery",
         "fallback_comparable_search",
+        "pdf_import_comparable_search",
     ]
     rank: int = Field(ge=1)
     postcode_distance_km: float | None = Field(default=None, ge=0)

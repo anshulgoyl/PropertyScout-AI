@@ -21,6 +21,7 @@ from propertyscout.discovery import (
     build_criteria,
     build_parser,
     csv_text,
+    discovery_search_queries,
     extract_listing_links,
     run_cli,
     trim_main_listing,
@@ -180,6 +181,37 @@ def test_index_pages_extract_expected_children() -> None:
         )
     }
     assert len(total) == 66
+
+
+def test_immoscout_queries_target_direct_exposes() -> None:
+    queries = discovery_search_queries(benrath_criteria())
+
+    assert queries[1:4] == [
+        "site:immobilienscout24.de/expose/ Eigentumswohnung kaufen Düsseldorf",
+        "site:immobilienscout24.de/expose/ Düsseldorf kaufen",
+        "site:immobilienscout24.de/expose/ Düsseldorf bis 300000 EUR Eigentumswohnung",
+    ]
+
+
+def test_immoscout_navigation_pages_are_not_fetched() -> None:
+    navigation_page = {
+        "title": "Wohnungen kaufen in Dortmund | ImmoScout24",
+        "url": "https://www.immobilienscout24.de/Suche/de/nordrhein-westfalen/dortmund/wohnung-kaufen",
+        "snippet": "Eigentumswohnung kaufen in Dortmund",
+    }
+    fetch = FakeFetchClient()
+    service = DiscoveryService(
+        search_client=FakeSearchClient(results=[navigation_page]),
+        fetch_client=fetch,
+        search_budget=1,
+    )
+
+    run = service.run(benrath_criteria())
+
+    assert fetch.calls == []
+    assert len(run.records) == 1
+    assert run.records[0].status is DiscoveryStatus.REJECTED
+    assert run.records[0].reasons == ["immo-scout-non-expose-url"]
 
 
 def test_detail_fixtures_parse_into_complete_records() -> None:

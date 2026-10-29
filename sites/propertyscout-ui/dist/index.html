@@ -5,14 +5,27 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content="Start and review PropertyScout AI acquisition searches." />
     <title>PropertyScout AI</title>
-    <link rel="stylesheet" href="styles.css?v=20261025-13" />
+    <link rel="stylesheet" href="styles.css?v=20261029-02" />
   </head>
   <body>
-    <header class="site-header">
+    <aside class="app-sidebar">
       <a class="brand" href="/app/" aria-label="PropertyScout AI home">
         <span class="brand-mark" aria-hidden="true">PS</span>
-        <span>PropertyScout <strong>AI</strong></span>
+        <span class="brand-copy"><span>PropertyScout <strong>AI</strong></span><small>Investment workspace</small></span>
       </a>
+      <nav class="pipeline-nav" aria-label="Property workflow">
+        <p class="nav-label">Acquisition workflow</p>
+        <button type="button" class="pipeline-scout-button" data-scout-nav><span class="stage-icon" aria-hidden="true">✦</span>Scout</button>
+        <div id="deal-tabs" class="deal-tabs" role="tablist" aria-label="Deal pipeline stages"></div>
+      </nav>
+      <div class="sidebar-bottom">
+        <p class="nav-label">Learn</p>
+        <button type="button" class="how-it-works-nav" data-property-education-nav><span aria-hidden="true">◈</span>Property Investment Education</button>
+        <button type="button" class="how-it-works-nav" data-how-it-works-nav><span aria-hidden="true">?</span>How It Works</button>
+      </div>
+    </aside>
+    <header class="site-header">
+      <div class="workspace-context"><span>Workspace</span><strong>Investment acquisition desk</strong></div>
       <span class="environment">Local workspace</span>
     </header>
 
@@ -20,9 +33,7 @@
       <section class="hero" aria-labelledby="page-title">
         <p class="eyebrow">Acquisition criteria</p>
         <h1 id="page-title">What should we look for?</h1>
-        <p class="lede">
-          Give the scout a focused brief. You can refine the investment assumptions later.
-        </p>
+        <p class="lede">PropertyScout AI — find stronger property opportunities and review every detail with confidence.</p>
       </section>
 
       <section class="workspace">
@@ -30,7 +41,7 @@
           <div class="section-heading">
             <div>
               <p class="step">01</p>
-              <h2>Core search</h2>
+              <h2>Scout</h2>
             </div>
             <span class="required-note">Required fields</span>
           </div>
@@ -127,7 +138,7 @@
         <div class="results-heading">
           <div><p class="eyebrow">Discovery inventory</p><h2>Discovered properties</h2></div>
           <div class="inventory-actions">
-            <button type="button" id="refresh-discoveries" class="ghost-button">Refresh</button>
+            <button type="button" id="refresh-discoveries" class="ghost-button">Refresh inventory</button>
             <button type="button" id="clear-discoveries" class="ghost-button">Clear inventory</button>
           </div>
         </div>
@@ -144,13 +155,11 @@
       </section>
 
       <section id="dashboard" class="results" aria-live="polite">
-        <div class="results-heading">
-          <div><p class="eyebrow">Deal pipeline</p><h2>Your deals</h2></div>
-          <button type="button" id="refresh-deals" class="ghost-button">Refresh</button>
+        <div class="results-heading deal-heading">
+          <div><p class="eyebrow">Deal pipeline</p><h2>Your deals</h2><p id="deal-count" class="deal-count" role="status"></p></div>
+          <button type="button" id="refresh-deals" class="ghost-button">Refresh deals</button>
         </div>
-        <p id="deal-count" class="deal-count" role="status"></p>
         <div id="pipeline-summary" class="pipeline-summary" aria-label="Pipeline overview"></div>
-        <div id="deal-tabs" class="deal-tabs" role="tablist" aria-label="Deal pipeline stages"></div>
         <div id="deal-controls" class="deal-controls" aria-label="Deal filters and view controls">
           <label>Location<select id="deal-city-filter"><option value="">All locations</option></select></label>
           <label>Status<select id="deal-status-filter"><option value="all">All statuses</option><option value="needs-action">Needs action</option><option value="active">In progress</option><option value="rejected">Rejected</option></select></label>
@@ -161,8 +170,60 @@
         <section id="deal-comparison" class="deal-comparison" hidden></section>
         <div id="deal-grid" class="deal-grid"></div>
       </section>
+
+      <section id="property-education" class="investor-education" hidden aria-labelledby="investor-education-title">
+          <div class="education-heading">
+            <p class="eyebrow">Property Investment Education</p>
+            <h2 id="investor-education-title">Build a stronger investment thesis, one decision at a time.</h2>
+            <p>Use these practical lenses before you buy. Start with your investment foundations, then evaluate the property, protect the downside, and plan how you will operate it over time.</p>
+          </div>
+          <div class="education-overview" aria-label="Education overview">
+            <div><strong>12</strong><span>investor lenses</span></div><div><strong>4</strong><span>decision areas</span></div><div><strong>1</strong><span>repeatable method</span></div>
+          </div>
+          <div class="education-browser">
+            <div class="education-browser-heading"><div><span>Choose a decision area</span><strong>Start with the question you need to answer now.</strong></div><small data-education-count>12 of 12 investor lenses</small></div>
+            <div class="education-categories" role="group" aria-label="Education decision areas">
+              <button type="button" class="education-category active" data-education-category-filter="all" aria-pressed="true"><span>All</span><strong>Full investment view</strong></button>
+              <button type="button" class="education-category" data-education-category-filter="foundation" aria-pressed="false"><span>01</span><strong>Foundation</strong><small>Strategy, finance &amp; tax</small></button>
+              <button type="button" class="education-category" data-education-category-filter="evaluate" aria-pressed="false"><span>02</span><strong>Evaluate</strong><small>Price, location &amp; building</small></button>
+              <button type="button" class="education-category" data-education-category-filter="protect" aria-pressed="false"><span>03</span><strong>Protect</strong><small>WEG, rights &amp; downside</small></button>
+              <button type="button" class="education-category" data-education-category-filter="operate" aria-pressed="false"><span>04</span><strong>Operate</strong><small>Rent, process &amp; exit</small></button>
+            </div>
+          </div>
+          <div class="education-grid">
+            <button type="button" class="education-tile" data-education-category="foundation" data-education-topic="leverage" aria-expanded="false"><span class="education-icon" aria-hidden="true">↗</span><span class="education-card-label">Foundation</span><h3>Build with leverage</h3><p>Use finance to own a larger, income-producing asset—without relying on speculation.</p><i aria-hidden="true">+</i></button>
+            <button type="button" class="education-tile" data-education-category="foundation" data-education-topic="tax" aria-expanded="false"><span class="education-icon" aria-hidden="true">€</span><span class="education-card-label">Foundation</span><h3>Use the tax framework</h3><p>Understand how eligible costs and depreciation can shape net rental income.</p><i aria-hidden="true">+</i></button>
+            <button type="button" class="education-tile" data-education-category="evaluate" data-education-topic="asset" aria-expanded="false"><span class="education-icon" aria-hidden="true">⌂</span><span class="education-card-label">Evaluate</span><h3>Own a useful asset</h3><p>Focus on liveable homes in locations where tenant demand is durable.</p><i aria-hidden="true">+</i></button>
+            <button type="button" class="education-tile" data-education-category="protect" data-education-topic="risk" aria-expanded="false"><span class="education-icon" aria-hidden="true">!</span><span class="education-card-label">Protect</span><h3>Protect the downside</h3><p>Stress-test vacancy, financing and repairs before you become committed.</p><i aria-hidden="true">+</i></button>
+            <button type="button" class="education-tile" data-education-category="operate" data-education-topic="process" aria-expanded="false"><span class="education-icon" aria-hidden="true">✓</span><span class="education-card-label">Operate</span><h3>Follow a repeatable process</h3><p>Research, compare, verify and document every meaningful decision.</p><i aria-hidden="true">+</i></button>
+            <button type="button" class="education-tile" data-education-category="foundation" data-education-topic="cashflow" aria-expanded="false"><span class="education-icon" aria-hidden="true">⌁</span><span class="education-card-label">Foundation</span><h3>Let cash flow lead</h3><p>Use realistic monthly assumptions to set the price you can defend.</p><i aria-hidden="true">+</i></button>
+            <button type="button" class="education-tile" data-education-category="evaluate" data-education-topic="pricing" aria-expanded="false"><span class="education-icon" aria-hidden="true">€</span><span class="education-card-label">Evaluate</span><h3>Price the whole purchase</h3><p>Compare market evidence and include every acquisition cost.</p><i aria-hidden="true">+</i></button>
+            <button type="button" class="education-tile" data-education-category="evaluate" data-education-topic="building" aria-expanded="false"><span class="education-icon" aria-hidden="true">⌂</span><span class="education-card-label">Evaluate</span><h3>Inspect the building</h3><p>Test condition, living area, layout, energy and maintenance backlog.</p><i aria-hidden="true">+</i></button>
+            <button type="button" class="education-tile" data-education-category="protect" data-education-topic="weg" aria-expanded="false"><span class="education-icon" aria-hidden="true">≡</span><span class="education-card-label">Protect</span><h3>Review the WEG</h3><p>Understand reserves, Hausgeld, planned works and governance.</p><i aria-hidden="true">+</i></button>
+            <button type="button" class="education-tile" data-education-category="protect" data-education-topic="legal" aria-expanded="false"><span class="education-icon" aria-hidden="true">§</span><span class="education-card-label">Protect</span><h3>Verify legal rights</h3><p>Check land-register entries, permits and ownership rights.</p><i aria-hidden="true">+</i></button>
+            <button type="button" class="education-tile" data-education-category="operate" data-education-topic="tenancy" aria-expanded="false"><span class="education-icon" aria-hidden="true">⌁</span><span class="education-card-label">Operate</span><h3>Underwrite the tenancy</h3><p>Test rent, regulation, vacancy and the actual lease position.</p><i aria-hidden="true">+</i></button>
+            <button type="button" class="education-tile" data-education-category="operate" data-education-topic="resilience" aria-expanded="false"><span class="education-icon" aria-hidden="true">◌</span><span class="education-card-label">Operate</span><h3>Protect the exit</h3><p>Assess insurance, climate exposure, infrastructure and hold risk.</p><i aria-hidden="true">+</i></button>
+          </div>
+          <section class="education-detail" data-education-detail aria-live="polite"><p>Select a topic to explore what it means for your investment decisions.</p></section>
+        </section>
+      <section id="how-it-works" class="how-it-works" hidden aria-labelledby="how-it-works-title">
+        <div class="how-it-works-intro">
+          <p class="eyebrow">How It Works</p>
+          <h2 id="how-it-works-title">From a listing to a purchase-ready decision</h2>
+          <p>Follow the journey from first search to purchase preparation. Open any stage to see what you can do there and what it helps you decide next.</p>
+        </div>
+        <ol class="how-it-works-flow">
+          <li><button type="button" data-how-stage="scout" aria-expanded="false"><span>01</span><div><strong>Scout</strong><p>Set your criteria and find candidate properties.</p></div><i aria-hidden="true">+</i></button></li>
+          <li><button type="button" data-how-stage="analyze" aria-expanded="false"><span>02</span><div><strong>Analyze</strong><p>Compare price, score, market evidence, and key facts.</p></div><i aria-hidden="true">+</i></button></li>
+          <li><button type="button" data-how-stage="contact" aria-expanded="false"><span>03</span><div><strong>Contact</strong><p>Verify listing facts, identify the contact, and prepare outreach.</p></div><i aria-hidden="true">+</i></button></li>
+          <li><button type="button" data-how-stage="financial" aria-expanded="false"><span>04</span><div><strong>Financial estimate</strong><p>Test cash flow, ROI, assumptions, and a negotiation position.</p></div><i aria-hidden="true">+</i></button></li>
+          <li><button type="button" data-how-stage="documents" aria-expanded="false"><span>05</span><div><strong>Documents & contract</strong><p>Request paperwork, flag gaps, and prepare for the notary.</p></div><i aria-hidden="true">+</i></button></li>
+        </ol>
+        <section class="how-stage-detail" data-how-stage-detail aria-live="polite" hidden></section>
+        <div class="how-it-works-note"><strong>A practical rule:</strong> move a property forward only when its current stage gives you enough evidence for the next decision.</div>
+      </section>
     </main>
 
-    <script src="app.js?v=20261025-36" defer></script>
+    <script src="app.js?v=20261029-09" defer></script>
   </body>
 </html>

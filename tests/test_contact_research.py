@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from propertyscout.contact_research import (
     ContactResearchService,
     ListingPageContactResearchService,
+    enrich_listing_features,
 )
 from propertyscout.graph import build_graph
 from propertyscout.schemas import ContactCandidate, ContactType, SourceEvidence, WorkflowOutcome
@@ -73,3 +74,23 @@ def test_one_confident_contact_is_selected_automatically() -> None:
     assert "__interrupt__" in outreach_paused
     assert outreach_paused["outcome"] == WorkflowOutcome.CONTACT_READY
     assert outreach_paused["selected_contact"].email == "verified@example.com"
+
+
+def test_listing_feature_enrichment_keeps_only_explicit_listing_facts() -> None:
+    property_listing = initial_state("shortlist")["property"].model_copy(
+        update={"features": ["Balcony"]}
+    )
+
+    enriched = enrich_listing_features(
+        property_listing,
+        """
+        2 Schlafzimmer, 1 Badezimmer und eine kleine Küchenzeile. Die Wohnung
+        liegt im 1. OG, ist provisionsfrei und wird über Fernwärme beheizt.
+        Energieklasse E. Baujahr: 1970. Gepflegt.
+        """,
+    )
+
+    assert enriched.features.count("Balcony") == 1
+    assert {"2 bedrooms", "1 bathroom", "Kitchenette", "1st floor", "No buyer commission", "Fernwärme"} <= set(enriched.features)
+    assert enriched.energy_class == "E"
+    assert enriched.build_year == 1970

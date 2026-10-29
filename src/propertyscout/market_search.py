@@ -127,7 +127,7 @@ _BUILD_YEAR = re.compile(
     re.IGNORECASE,
 )
 _ENERGY_CLASS = re.compile(
-    r"Energie(?:effizienz)?klasse\s*[:\-]?\s*(?:Klasse\s*)?"
+    r"(?:Energie(?:effizienz)?klasse|Energieausweis)\s*[:\-]?\s*(?:Klasse\s*)?"
     r"(?P<value>[A-G](?:\+\+)?)",
     re.IGNORECASE,
 )
@@ -665,7 +665,6 @@ def search_queries(criteria: InvestmentCriteria) -> list[str]:
         property_type.casefold(), property_type
     )
     budget = f"{criteria.maximum_purchase_price.amount:g}"
-
     variants = [
         primary,
         f"{search_type} {location} kaufen bis {budget} EUR",

@@ -18,16 +18,307 @@ const dealStatusFilter = document.querySelector("#deal-status-filter");
 const dealSort = document.querySelector("#deal-sort");
 const dealCompareToggle = document.querySelector("#deal-compare-toggle");
 const dealComparison = document.querySelector("#deal-comparison");
+const propertyEducationSection = document.querySelector("#property-education");
+const propertyEducationButton = document.querySelector("[data-property-education-nav]");
+const educationDetail = document.querySelector("[data-education-detail]");
+const howItWorksSection = document.querySelector("#how-it-works");
+const howItWorksButton = document.querySelector("[data-how-it-works-nav]");
+const howStageDetail = document.querySelector("[data-how-stage-detail]");
 const workflowCard = document.querySelector("#workflow-card");
 const workflowStatus = document.querySelector("#workflow-status");
+const WORKSPACE_VIEWS = ["scout", "analyze", "contact", "financials", "documents", "property-education", "how-it-works"];
+const savedWorkspaceView = localStorage.getItem("propertyscout-active-workspace");
 let focusedWorkflowThreadId = null;
-let activeDealTab = "analyze";
+const savedDealTab = localStorage.getItem("propertyscout-active-deal-tab");
+let activeDealTab = ["analyze", "contact", "financials", "documents"].includes(savedDealTab)
+  ? savedDealTab
+  : "analyze";
+let activeSidebarItem = WORKSPACE_VIEWS.includes(savedWorkspaceView) ? savedWorkspaceView : "scout";
 let selectedFinancialThreadId = null;
+let selectedDocumentThreadId = null;
 let dealsByThreadId = new Map();
 let comparisonMode = false;
 const comparisonThreadIds = new Set();
 const dealView = { city: "", status: "all", sort: "score" };
 const financialDealThreadIds = new Set(JSON.parse(localStorage.getItem("propertyscout-financial-deals") || "[]"));
+const documentDealThreadIds = new Set(JSON.parse(localStorage.getItem("propertyscout-document-deals") || "[]"));
+
+function rememberWorkspace(view) {
+  activeSidebarItem = view;
+  localStorage.setItem("propertyscout-active-workspace", view);
+}
+
+function closeLearningViews() {
+  propertyEducationSection.hidden = true;
+  howItWorksSection.hidden = true;
+  howItWorksButton?.classList.remove("active");
+  propertyEducationButton?.classList.remove("active");
+}
+
+function showScoutWorkspace({ focus = false } = {}) {
+  closeLearningViews();
+  document.querySelectorAll(".hero, .workspace, #results, #discovery").forEach((section) => { section.hidden = false; });
+  dashboardSection.hidden = true;
+  rememberWorkspace("scout");
+  document.querySelector("[data-scout-nav]")?.classList.add("active");
+  dealTabs.querySelectorAll(".deal-tab").forEach((item) => item.classList.remove("active"));
+  if (focus) {
+    form.scrollIntoView({ behavior: "smooth", block: "start" });
+    form.querySelector("input, select")?.focus({ preventScroll: true });
+  }
+}
+
+function showDealWorkspace() {
+  closeLearningViews();
+  document.querySelectorAll(".hero, .workspace, #results, #discovery").forEach((section) => { section.hidden = true; });
+  dashboardSection.hidden = false;
+  rememberWorkspace(activeDealTab);
+  document.querySelector("[data-scout-nav]")?.classList.remove("active");
+}
+
+function showHowItWorks() {
+  document.querySelectorAll(".hero, .workspace, #results, #discovery, #dashboard").forEach((section) => { section.hidden = true; });
+  propertyEducationSection.hidden = true;
+  howItWorksSection.hidden = false;
+  rememberWorkspace("how-it-works");
+  document.querySelector("[data-scout-nav]")?.classList.remove("active");
+  dealTabs.querySelectorAll(".deal-tab").forEach((item) => item.classList.remove("active"));
+  howItWorksButton?.classList.add("active");
+  propertyEducationButton?.classList.remove("active");
+  howItWorksSection.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function showPropertyEducation() {
+  document.querySelectorAll(".hero, .workspace, #results, #discovery, #dashboard").forEach((section) => { section.hidden = true; });
+  howItWorksSection.hidden = true;
+  propertyEducationSection.hidden = false;
+  rememberWorkspace("property-education");
+  document.querySelector("[data-scout-nav]")?.classList.remove("active");
+  dealTabs.querySelectorAll(".deal-tab").forEach((item) => item.classList.remove("active"));
+  howItWorksButton?.classList.remove("active");
+  propertyEducationButton?.classList.add("active");
+  if (!propertyEducationSection.querySelector(".education-tile.active")) showEducationTopic("leverage");
+  setEducationCategory(activeEducationCategory);
+  propertyEducationSection.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function hideHowItWorks() {
+  closeLearningViews();
+}
+
+const HOW_STAGE_DETAILS = {
+  scout: {
+    title: "Scout",
+    description: "Define what a good investment looks like for you, then build a focused shortlist. You stay in control of which opportunities are worth taking into a deeper review.",
+    features: [
+      ["Set your buy criteria", "Choose the city or postcode, budget, minimum size and rooms, property type, and any additional requirements that matter to your strategy."],
+      ["Find matching opportunities", "Start a search to collect available listings that fit those criteria in one place."],
+      ["Review search results", "See each result’s basic property information and listing source before deciding whether it deserves closer attention."],
+      ["Understand listing quality", "A clear status helps you separate usable listings from incomplete, rejected, or unavailable results—so you do not spend time on weak leads."],
+      ["Choose your shortlist", "Select only the properties you want to investigate. They move to Analyze; the rest remain outside your active deal pipeline."],
+    ],
+  },
+  analyze: {
+    title: "Analyze",
+    description: "Turn a listing into an informed investment decision. Compare the asking price with market evidence, understand the strongest and weakest facts, then decide whether it is worth contacting the seller or broker.",
+    features: [
+      ["See the deal score", "Open the score explanation to understand how the property performed in the initial screen and which information is still affecting confidence."],
+      ["Check the market value", "Compare the asking price against selected comparable listings, including the price gap and the evidence used to estimate value."],
+      ["Open the comparable listings", "Review the individual comparable properties behind the estimate instead of relying on a number without context."],
+      ["Read the key facts quickly", "See concise details such as living area, rooms, price per m², build year, energy class, condition and standout features."],
+      ["Spot missing information", "See important unanswered questions—such as rent, condition, energy, or market evidence—before you spend more time on the deal."],
+      ["Review and decide", "Expand the decision review when you want the complete assessment, then approve, reject, or request a revision. Rejected listings keep a short explanation of why they did not pass."],
+      ["Start from a PDF exposé", "Upload a new property exposé to create a new deal from the facts stated in the document, with supporting online evidence checked where available."],
+      ["Compare shortlisted deals", "Choose up to four properties and compare their core price, size, score and comparable-market measures side by side."],
+    ],
+  },
+  contact: {
+    title: "Contact",
+    description: "Use this stage for the properties that have earned more effort. Confirm who you are dealing with, fill the gaps that matter, and send a clear first message with the right questions.",
+    features: [
+      ["Know who represents the listing", "See whether the available evidence suggests a private seller, a broker, or is still unclear, alongside the named contact or agency when available."],
+      ["Review contact details", "Open the contact panel to see the available contact route and go directly to the original listing when you need to verify it."],
+      ["Send a stronger first enquiry", "Use the prepared outreach email, with the key requests highlighted, then open it as a Gmail draft when you are ready to send."],
+      ["Prepare the right questions", "Get a focused checklist for the broker or seller, including the evidence that is still missing for this specific property."],
+      ["Refresh key listing facts", "When you approve a deal for Contact, the app makes a further check for available property and contact information before you continue."],
+      ["Add new broker evidence", "Upload a broker’s exposé or contact PDF for an existing deal. Only the details stated in that document are added to the property record."],
+      ["Move into financial planning", "Choose Prepare Financials once you have enough facts to test the purchase and financing case."],
+    ],
+  },
+  financial: {
+    title: "Financial estimate",
+    description: "Test the numbers before you negotiate. Adjust the assumptions to reflect your own purchase, financing and rent plan, then use the result to decide what price you can justify.",
+    features: [
+      ["Model the full purchase", "Edit the assumptions that drive acquisition costs, rental income, financing, ownership costs and the tax estimate."],
+      ["See the 10-year picture", "Review projected cash flow, property value, loan balance, equity and total wealth effect over ten years."],
+      ["Check your return", "See the 10-year ROI on your initial cash alongside the upfront cash requirement, so a headline yield is not viewed in isolation."],
+      ["Stress-test the plan", "Switch between base, conservative and optimistic scenarios to see how resilient the decision is when the assumptions change."],
+      ["Use the charts", "Compare cash flow, equity, rental income, ownership costs and wealth over time through the interactive financial view."],
+      ["Prepare a negotiation position", "Get an opening price and target price with a rationale based on the comparable-market evidence and the unresolved property risks."],
+      ["Keep evidence in view", "The property’s price, size, rooms and comparable context stay next to the model so your assumptions remain grounded in the actual listing."],
+      ["Send a ready deal to documents", "When the financial case is strong enough to progress, choose Documents & contracts to start the purchase-file review."],
+    ],
+  },
+  documents: {
+    title: "Documents & contract",
+    description: "Build a clear purchase file before you commit. Keep each property’s paperwork separate, see what is still missing, and identify the points to clarify before a notary appointment.",
+    features: [
+      ["Work on one property at a time", "Choose a property from the selector so its documents, requests and review results stay separate from every other deal."],
+      ["Use the standard purchase checklist", "Track the core paperwork commonly needed for a purchase, including items such as the land-register extract, draft contract, energy certificate and floor plan."],
+      ["See listing-specific requests", "Get an additional checklist based on the property’s particular characteristics and the gaps found during analysis."],
+      ["Upload received documents", "Store PDFs, Word files, text files and images with the selected property in your local workspace."],
+      ["Track what has arrived", "Relevant checklist items are marked when matching documents are uploaded, making the remaining requests easy to see."],
+      ["Review for discrepancies", "Compare extracted document facts with the listing and surface any clear contradictions that need clarification."],
+      ["Prepare the contract conversation", "Review suggested contract topics and questions to raise with the broker, lender, adviser or notary before you sign."],
+    ],
+  },
+};
+
+const EDUCATION_DETAILS = {
+  leverage: {
+    title: "Build with leverage—not speculation",
+    description: "Property is often attractive because you can combine your equity with long-term financing to buy a larger asset than cash alone would allow. With a carefully selected rental property, the rent can contribute to the property’s running costs and loan payments while your ownership share grows. The investment case should still work if prices stay flat: buy because the rent, financing and condition make sense, not because you assume a quick resale gain.",
+    takeaways: ["Keep enough liquidity after the purchase instead of putting every euro into the down payment.", "Model the deal at today’s financing rate and include a higher-rate refinancing scenario.", "Treat a property as a long-term operating asset, not a short-term trading position."],
+    link: ["Read Finanztip’s guide to rental property as an investment", "https://www.finanztip.de/baufinanzierung/immobilie-kapitalanlage/"],
+  },
+  tax: {
+    title: "Use the tax framework intelligently",
+    description: "Rental income is taxable, but eligible costs connected to earning it may reduce the taxable result. Depending on the property and your individual circumstances, this can include loan interest, certain operating and management costs, and depreciation of the building. Tax effects can improve a sound deal; they should never be the only reason to buy one. Discuss the assumptions and ownership structure with a qualified tax adviser before relying on them.",
+    takeaways: ["Separate the purchase price allocation for land and building before estimating depreciation.", "Keep evidence for every deductible cost from day one.", "Compare the after-tax case with a conservative pre-tax cash-flow scenario."],
+    link: ["Learn how investors assess rental-property returns", "https://www.finanztip.de/baufinanzierung/immobilie-kapitalanlage/"],
+  },
+  asset: {
+    title: "Own a real, useful asset",
+    description: "Housing meets an everyday need. A well-located, well-maintained home can remain relevant to tenants through changing market cycles, giving the investment a practical income base. That does not mean every property is investable: local employment, transport, liveability, energy efficiency, layout and the building’s condition all influence future tenant demand and resale appeal.",
+    takeaways: ["Study the immediate neighbourhood, not just the city’s average statistics.", "Prioritise a layout, condition and energy profile a future tenant can understand and value.", "Ask whether you would still want to own the property if the market were slower for several years."],
+    link: ["Explore a consumer checklist for assessing a property purchase", "https://www.finanztip.de/baufinanzierung/immobilie-kapitalanlage/"],
+  },
+  risk: {
+    title: "Protect the downside before chasing return",
+    description: "The most durable property investments are underwritten for the difficult months, not the perfect ones. Consider a vacancy period, a rent that grows more slowly than expected, a higher refinancing rate, a special owners’ association assessment or a repair that cannot be postponed. If the cash reserve and monthly plan can absorb those events, your decisions are calmer and your negotiation position is stronger.",
+    takeaways: ["Add every acquisition cost: transfer tax, notary, land register and any broker fee.", "Review homeowners’ association minutes, reserves and planned works before buying a condominium.", "Keep a dedicated reserve for repairs and income interruptions."],
+    link: ["Read the Verbraucherzentrale guide to financing and purchase costs", "https://www.verbraucherzentrale.de/wissen/geld-versicherungen/bau-und-immobilienfinanzierung/immobilienfinanzierung-haeufige-fragen-rund-um-hauskauf-und-hauskredit-6992"],
+  },
+  process: {
+    title: "Follow a repeatable process",
+    description: "Professional investors make fewer emotional decisions because they compare opportunities through the same sequence every time. Define your strategy and cash limit, use Scout to create a shortlist, use Analyze to test the price and evidence, then contact only the strongest deals. Before an offer, review the financial scenario and request the documents that reveal the property’s real obligations.",
+    takeaways: ["Write your buy criteria before you see the next attractive listing.", "Move a deal forward only when the evidence earned the next step.", "Keep the property facts, calculations and documents together so you can explain your decision."],
+    link: ["See common property-financing considerations", "https://www.verbraucherzentrale.de/wissen/geld-versicherungen/bau-und-immobilienfinanzierung/immobilienfinanzierung-diese-modelle-gibt-es-und-das-sollten-sie-beachten-5801"],
+  },
+  cashflow: {
+    title: "Let cash flow lead the decision",
+    description: "Gross yield is a helpful first filter, but it is not the return you keep. A purchase becomes investable when the rent, interest, repayment, management, non-recoverable costs, maintenance and vacancy allowance work together. Testing these assumptions makes it easier to identify the price at which the deal becomes sensible—and gives you a clear rationale when negotiating with a broker or seller.",
+    takeaways: ["Use realistic achievable rent, not the most optimistic asking-rent estimate.", "Model monthly cash flow alongside the longer-term ROI and refinancing risk.", "Set a walk-away price before the conversation becomes emotional."],
+    link: ["Use an independent guide to test a rental-property investment", "https://www.finanztip.de/baufinanzierung/immobilie-kapitalanlage/"],
+  },
+  pricing: {
+    title: "Underwrite the all-in purchase price",
+    description: "The advertised price is only the starting point. A defensible investment compares the price per square metre with genuinely comparable local sales and listings, then adds every acquisition cost before assessing return. Broker terms, transfer tax, notary, land-register fees and any immediate works belong in the same decision—not in a separate afterthought.",
+    takeaways: ["Compare price per m² only with nearby homes of similar age, condition, floor, size and tenure.", "Model transfer tax, notary, land-register and broker costs in the initial cash requirement.", "Confirm the broker engagement and fee split before treating any advertised price as all-in.", "Set a maximum all-in purchase price before opening negotiations."],
+    link: ["Read the Verbraucherzentrale guide to buying and financing", "https://www.verbraucherzentrale.de/wissen/geld-versicherungen/bau-und-immobilienfinanzierung/immobilienfinanzierung-haeufige-fragen-rund-um-hauskauf-und-hauskredit-6992"],
+  },
+  building: {
+    title: "Read the building, not only the apartment",
+    description: "A bright kitchen or fresh paint can conceal expensive building-level work. The investor case should reflect the roof, facade, pipes, windows, electrical installation, balconies, lift, insulation and heating—not only the condition inside the unit. Area calculations and layout also affect rent, valuation and future tenant appeal.",
+    takeaways: ["Verify the living-area calculation; a difference in m² changes both yield and valuation.", "Assess the floor plan, storage, daylight, access and floor level for the target tenant—not just nominal size.", "Identify deferred repairs and understand their timing, scope and likely funding source.", "Review energy class, heating type, system age and practical retrofit options."],
+    link: ["Understand current heating and energy rules for existing buildings", "https://www.bmwsb.bund.de/DE/bauen/innovation-klimaschutz/gebaeudeenergiegesetz/gebaeudeenergiegesetz_node.html"],
+  },
+  weg: {
+    title: "Treat the WEG as part of the asset",
+    description: "When buying a condominium, you are also buying into a homeowners’ association. The financial health, governance and maintenance position of the WEG can be as important as the apartment itself. A low reserve, unresolved repair backlog or planned major work can turn an apparently attractive unit into a costly investment.",
+    takeaways: ["Read the last three owners’ meeting minutes for planned works, disputes and special assessments.", "Separate recoverable tenant costs from owner-only Hausgeld, management costs and reserve contributions.", "Review the reserve fund, annual statement and current economic plan rather than relying on one monthly Hausgeld figure.", "Request the declaration of division and community rules to understand rights, obligations and restrictions."],
+    link: ["Use the German consumer guide to prepare a property purchase", "https://www.verbraucherzentrale.de/wissen/geld-versicherungen/bau-und-immobilienfinanzierung/immobilienfinanzierung-haeufige-fragen-rund-um-hauskauf-und-hauskredit-6992"],
+  },
+  legal: {
+    title: "Verify the legal reality",
+    description: "The listing description is not the legal record. Before making an offer, confirm ownership, land-register burdens, rights of way, residential rights, parking rights, permitted use and whether additions or conversions have the required approvals. These facts can determine whether a feature is valuable, restricted or not legally usable at all.",
+    takeaways: ["Review the land-register extract for ownership, encumbrances, easements and existing land charges.", "For houses or plots, confirm boundaries, access and shared-driveway arrangements.", "Check permits and approved plans for extensions, attic conversions, balconies and changes of use.", "Confirm whether parking, garage and storage are owned separately, special-use rights or simply advertised amenities."],
+    link: ["Review the legal framework for German real-estate transfers", "https://www.gesetze-im-internet.de/grestg_1983/"],
+  },
+  tenancy: {
+    title: "Invest in the income, not the headline rent",
+    description: "A rental investment is an operating asset. Establish who the likely tenant is, what rent is sustainable, and what the current tenancy actually permits. Current rent, achievable rent, rent regulation, vacancy, lease clauses and reletting costs should all be tested before a yield figure is trusted.",
+    takeaways: ["Verify current rent, deposit, arrears, lease type, index or stepped-rent clauses and notice restrictions.", "Use realistic achievable rent and local Mietspiegel context—not the most optimistic advertised potential.", "Define the target tenant and test whether location, layout and condition genuinely serve that group.", "Model vacancy, reletting time and incentives alongside ongoing management and maintenance costs."],
+    link: ["Learn the key questions to ask before financing a property", "https://www.verbraucherzentrale.de/wissen/geld-versicherungen/bau-und-immobilienfinanzierung/immobilienfinanzierung-diese-modelle-gibt-es-und-das-sollten-sie-beachten-5801"],
+  },
+  resilience: {
+    title: "Plan for resilience and exit",
+    description: "A property should remain investable through ordinary setbacks: a quieter rental market, an insurance claim, a repair, a refinancing event or slower price growth. Review environmental exposure, neighbourhood change, utilities and insurance alongside the exit strategy. The goal is a property you can comfortably hold, not one you must sell at the wrong time.",
+    takeaways: ["Check building insurance, deductibles, past claims and flood or natural-hazard cover.", "Assess flood, heat, storm, groundwater, noise and planned development in the immediate area.", "Confirm broadband, utility capacity and practical future infrastructure such as EV charging.", "Model a long hold and a conservative resale: acquisition costs and early loan repayment can make a fast exit expensive."],
+    link: ["Read consumer guidance on long-term property financing risk", "https://www.verbraucherzentrale.de/wissen/geld-versicherungen/bau-und-immobilienfinanzierung/immobilienfinanzierung-haeufige-fragen-rund-um-hauskauf-und-hauskredit-6992"],
+  },
+};
+
+let activeEducationCategory = "all";
+
+function setEducationCategory(category) {
+  activeEducationCategory = category;
+  const categoryButtons = propertyEducationSection?.querySelectorAll("[data-education-category-filter]") || [];
+  const tiles = [...(propertyEducationSection?.querySelectorAll(".education-tile") || [])];
+  categoryButtons.forEach((button) => {
+    const active = button.dataset.educationCategoryFilter === category;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  const visibleTiles = tiles.filter((tile) => {
+    const visible = category === "all" || tile.dataset.educationCategory === category;
+    tile.hidden = !visible;
+    return visible;
+  });
+  const count = propertyEducationSection?.querySelector("[data-education-count]");
+  if (count) count.textContent = `${visibleTiles.length} of ${tiles.length} investor lenses`;
+  const selectedTile = propertyEducationSection?.querySelector(".education-tile.active");
+  if (!selectedTile || selectedTile.hidden) showEducationTopic(visibleTiles[0]?.dataset.educationTopic);
+}
+
+function showEducationTopic(topic) {
+  const detail = EDUCATION_DETAILS[topic];
+  if (!detail || !educationDetail) return;
+  propertyEducationSection.querySelectorAll(".education-tile").forEach((tile) => {
+    const active = tile.dataset.educationTopic === topic;
+    tile.classList.toggle("active", active);
+    tile.setAttribute("aria-expanded", String(active));
+  });
+  educationDetail.innerHTML = `<div><span>Investor lens</span><h3>${escapeHtml(detail.title)}</h3><p>${escapeHtml(detail.description)}</p></div><div><h4>Put it into practice</h4><ul>${detail.takeaways.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul><a href="${detail.link[1]}" target="_blank" rel="noopener">${escapeHtml(detail.link[0])} ↗</a></div>`;
+}
+
+function wireEducationTiles() {
+  propertyEducationSection?.addEventListener("click", (event) => {
+    const categoryButton = event.target.closest("[data-education-category-filter]");
+    if (categoryButton && propertyEducationSection.contains(categoryButton)) {
+      setEducationCategory(categoryButton.dataset.educationCategoryFilter);
+      return;
+    }
+    const tile = event.target.closest(".education-tile");
+    if (!tile || !propertyEducationSection.contains(tile)) return;
+    showEducationTopic(tile.dataset.educationTopic);
+  });
+}
+
+function wireHowItWorksCards() {
+  howItWorksSection?.querySelectorAll("[data-how-stage]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const stage = button.dataset.howStage;
+      const detail = HOW_STAGE_DETAILS[stage];
+      if (!detail) return;
+      const wasOpen = button.getAttribute("aria-expanded") === "true";
+      howItWorksSection.querySelectorAll("[data-how-stage]").forEach((item) => {
+        item.setAttribute("aria-expanded", "false");
+        item.classList.remove("active");
+      });
+      if (wasOpen) {
+        howStageDetail.hidden = true;
+        howStageDetail.innerHTML = "";
+        return;
+      }
+      button.setAttribute("aria-expanded", "true");
+      button.classList.add("active");
+      const features = detail.features.map(([title, description]) => `<article><strong>${escapeHtml(title)}</strong><p>${escapeHtml(description)}</p></article>`).join("");
+      howStageDetail.innerHTML = `<div class="how-stage-summary"><span>Selected stage</span><div><strong>${escapeHtml(detail.title)}</strong><p>${escapeHtml(detail.description)}</p></div></div><div class="how-stage-features"><h3>What you can do here</h3>${features}</div>`;
+      howStageDetail.hidden = false;
+    });
+  });
+}
 
 const cleanOptionalNumber = (data, name) => {
   const value = data.get(name);
@@ -90,9 +381,10 @@ const STATUS_PRIORITY = {
 };
 
 const DEAL_TABS = [
-  { id: "analyze", label: "Analyze" },
-  { id: "contact", label: "Contact" },
-  { id: "financials", label: "Financial Estimates" },
+  { id: "analyze", label: "Analyze", icon: "⌕" },
+  { id: "contact", label: "Contact", icon: "☏" },
+  { id: "financials", label: "Financial Estimates", icon: "€" },
+  { id: "documents", label: "Documents & Contract", icon: "▤" },
 ];
 
 const CONTACT_STAGES = new Set([
@@ -163,7 +455,7 @@ const readError = async (response) => {
 };
 
 const percent = (value) => (value == null ? "—" : `${(value * 100).toFixed(1)}%`);
-const euros = (money) => (money ? `${money.currency} ${money.amount.toLocaleString()}` : "—");
+const euros = (money) => (money ? `${money.currency} ${Math.round(money.amount).toLocaleString("en-US")}` : "—");
 const financialEuros = (value) => `EUR ${Math.round(Number(value) || 0).toLocaleString("en-US")}`;
 
 function stageTracker(stage) {
@@ -180,6 +472,19 @@ const propertyMetrics = (property) => `
     <span>${property.room_count ?? "—"} rooms · ${property.living_area_sqm ?? "—"} m²</span>
     <span>${euros(property.asking_price)}</span>
   </div>`;
+
+function scoreExplanationPanel(analysis) {
+  const score = analysis.score;
+  const components = analysis.score_components;
+  if (score == null || !components) return "";
+  const criteria = [
+    ["value_gap", "Price vs. market estimate", 45],
+    ["comp_confidence", "Comparable confidence", 20],
+    ["condition_energy", "Condition & energy", 20],
+    ["data_completeness", "Data completeness", 15],
+  ];
+  return `<section class="score-explanation" data-score-panel hidden><div><p class="eyebrow">Deal score explained</p><h4>${score}/100</h4></div><p>The score is a screening aid based on the saved listing and comparable data. It is not a valuation or investment recommendation.</p><ul>${criteria.map(([key, label, maximum]) => `<li><span>${escapeHtml(label)}</span><strong>${Number(components[key] || 0).toFixed(0)} <small>/ ${maximum}</small></strong></li>`).join("")}</ul></section>`;
+}
 
 const missingDataPanel = (analysis, status) =>
   status === "needs_research" && analysis.missing_critical_data?.length
@@ -242,7 +547,13 @@ function evidenceFeatureFacts(property) {
     capture("Maintenance reserve", /(?:instandhaltungsrücklage|rücklage)\s*[:\-]?\s*([^.;]{2,64})/i),
     capture("Special assessment", /(?:sonderumlage)\s*[:\-]?\s*([^.;]{2,64})/i),
     capture("Buyer commission", /(?:käuferprovision|courtage|provision)\s*[:\-]?\s*([^.;]{2,64})/i),
-  ].filter(Boolean);
+  ].filter(Boolean).sort((a, b) => Number(a.includes("not stated")) - Number(b.includes("not stated")));
+}
+
+function propertyEnergyClass(property) {
+  if (property.energy_class) return property.energy_class;
+  const evidence = (property.evidence || []).map((item) => item.excerpt || "").join("\n");
+  return evidence.match(/(?:energie(?:effizienz)?klasse|energieausweis)\s*[:\-]?\s*(?:klasse\s*)?([A-G](?:\+\+)?)/i)?.[1]?.toUpperCase() || null;
 }
 
 function propertyFeaturePanel(property, analysis) {
@@ -251,25 +562,29 @@ function propertyFeaturePanel(property, analysis) {
   const pricePerSqm = property.asking_price?.amount && property.living_area_sqm
     ? { amount: property.asking_price.amount / property.living_area_sqm, currency: property.asking_price.currency }
     : null;
+  const energyClass = propertyEnergyClass(property);
+  const detailFacts = evidenceFeatureFacts(property)
+    .filter((fact) => /(?:heating|current cold rent|monthly service charge|rental income|modernisation|available from)/i.test(fact))
+    .slice(0, 2);
+  const listingFeatures = (property.features || [])
+    .map((feature) => String(feature).replace(/\s+/g, " ").trim())
+    .filter((feature) => feature && feature.length <= 42)
+    .slice(0, 4);
   const items = [
-    property.address || (property.postal_code || property.city ? `${property.postal_code || ""} ${property.city || ""}`.trim() : null),
     property.property_type ? humanize(property.property_type) : null,
     property.room_count ? `${property.room_count} rooms` : null,
-    property.living_area_sqm ? `${property.living_area_sqm} m² living area` : null,
+    property.living_area_sqm ? `${property.living_area_sqm} m²` : null,
+    property.asking_price ? euros(property.asking_price) : null,
+    pricePerSqm ? `${euros(pricePerSqm)}/m²` : null,
+    ...listingFeatures,
     property.build_year ? `Built ${property.build_year}` : null,
-    floor ? `Floor: ${floor}` : null,
-    property.condition ? `Condition: ${humanize(property.condition)}` : null,
-    property.energy_class ? `Energy class ${property.energy_class}` : null,
-    pricePerSqm ? `Asking ${euros(pricePerSqm)}/m²` : null,
-    property.annual_rent ? `Annual rent ${euros(property.annual_rent)}` : null,
-    analysis.metrics?.gross_yield ? `${(analysis.metrics.gross_yield * 100).toFixed(1)}% stated gross yield` : null,
-    ...(property.features || []).slice(0, 5),
-    ...evidenceFeatureFacts(property),
-    ...listingDetailSnippets(property).slice(0, 6),
-    ...(analysis.missing_critical_data || []).slice(0, 4).map((item) => `To verify: ${humanize(item)}`),
-  ].filter(Boolean);
+    energyClass ? `Energy ${energyClass}` : null,
+    property.condition ? humanize(property.condition) : null,
+    floor ? floor : null,
+    ...detailFacts,
+  ].filter(Boolean).slice(0, 9);
   if (!items.length) return "";
-  return `<section class="property-features-panel"><strong>Key property features</strong><small>Facts captured from the selected listing page and this deal's valuation.</small><div>${items.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div></section>`;
+  return `<section class="property-features-panel"><strong>At a glance</strong><div>${items.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div></section>`;
 }
 
 const diagnosticPanel = (deal) => {
@@ -309,7 +624,7 @@ function approvalPanelHTML(deal) {
     return `
       <div class="approval-panel" data-approval="shortlist">
         <strong>Shortlist approval</strong>
-        <p>${escapeHtml(interrupt.analysis?.thesis || "Review this candidate for your shortlist.")}</p>
+        <p>Review the summary and valuation above, then decide whether this property should move into contact research.</p>
         <label>Feedback <small>optional</small><textarea class="feedback" rows="2" placeholder="Optional feedback"></textarea></label>
         <div class="approval-actions">
           <button type="button" class="approve" data-decision="approved">Approve</button>
@@ -386,7 +701,7 @@ function approvalPanelHTML(deal) {
 }
 
 function listingContactContext(property, contact) {
-  const text = (property?.evidence || []).map((item) => item.excerpt || "").join(" ").toLocaleLowerCase();
+  const text = [property?.title, property?.description, ...(property?.features || []), ...(property?.evidence || []).map((item) => item.excerpt || "")].filter(Boolean).join(" ").toLocaleLowerCase();
   const isBroker = /\b(makler|immobilienmakler|immobilienagentur|immobilienbüro|agentur|real\s+estate|hausverwaltung|gmbh|kg|engel\s*&\s*völkers|provision\s+für\s+käufer|u-?w-?i\s+ulrike\s+wollscheid\s+immobilien)\b/.test(text);
   const isPrivate = /\b(von\s+privat|privatanbieter|privatverkauf|private[rs]?\s+anbieter|direkt\s+vom\s+eigentümer|ohne\s+makler)\b/.test(text);
   const hasForm = /\b(kontaktformular|anfrageformular|formular|anfrage\s+senden|nachricht\s+senden|anbieter\s+kontaktieren|kontakt\s+aufnehmen)\b/.test(text);
@@ -398,7 +713,7 @@ function listingContactContext(property, contact) {
 function contactDetailsPanel(deal) {
   const state = deal.state || {};
   const property = state.property || {};
-  const contact = state.selected_contact;
+  const contact = state.selected_contact || state.contact_candidates?.[0];
   const context = listingContactContext(property, contact);
   const listingUrl = safeHttpUrl(property.listing_url);
   const phoneOnly = state.outcome === "contact_method_required";
@@ -419,11 +734,20 @@ function contactDetailsPanel(deal) {
       <h4>Contact details</h4>
       <span class="contact-type${context.uncertain ? " uncertain" : ""}">${escapeHtml(context.label)}</span>
       <p>${escapeHtml(context.detail)}</p>
-      ${contact ? `<p><strong>${escapeHtml(contact.name)}</strong> · ${confidence}% confidence</p><p>${fields || "A contact was found, but details are incomplete."}</p>` : `<p><strong>Research Agent could not identify a reliable named contact.</strong></p><p>${phoneOnly ? "A phone contact was found, but no email address is available." : nextStep}</p>`}
+      ${contact ? `<p><strong>${escapeHtml(contact.name)}</strong> · ${confidence}% confidence</p><p>${fields || "A contact was found, but no direct email or phone number was saved."}</p>` : `<p><strong>No named contact was present in the saved listing evidence.</strong></p><p>${phoneOnly ? "A phone contact was found, but no email address is available." : nextStep}</p>`}
       <p>${listingAction}</p>
+      <button type="button" class="ghost-button" data-enrich-contact>Refresh listing facts & contact</button>
+      <small>Runs one additional Keyless listing fetch for this deal (maximum five credits; this action is recorded and will not repeat on refresh).</small>
       <small>Contact information is extracted only from the selected listing page.</small>
       ${deal.pending_approval_type === "contact_resolution" ? approvalPanelHTML(deal) : ""}
     </section>`;
+}
+
+function emailPreview(body) {
+  return body.split("\n").map((line) => {
+    const content = escapeHtml(line);
+    return line.startsWith("- ") ? `<strong>${content}</strong>` : content;
+  }).join("<br>");
 }
 
 function outreachEmailPanel(deal) {
@@ -446,22 +770,20 @@ function outreachEmailPanel(deal) {
     <section class="contact-work-panel" data-contact-panel="outreach" hidden>
       <h4>Outreach email</h4>
       ${email ? `<p>Ready for <a class="deal-source-link" href="mailto:${escapeHtml(email)}">${escapeHtml(email)}</a>.</p>` : `<p>No email address is visible yet. This draft is ready to adapt for the listing's contact form or a future email address.</p>`}
-      ${action ? `<a class="gmail-draft-button" href="${escapeHtml(gmailUrl.href)}" target="_blank" rel="noopener">Draft in Gmail ↗</a>` : `<label>Subject<input readonly value="${escapeHtml(subject)}" /></label><label>Draft email<textarea readonly rows="13">${escapeHtml(body)}</textarea></label><a class="gmail-draft-button" href="${escapeHtml(gmailUrl.href)}" target="_blank" rel="noopener">Draft in Gmail ↗</a><small>This opens a Gmail compose draft only; it does not send anything.</small>`}
+      ${action ? `<a class="gmail-draft-button" href="${escapeHtml(gmailUrl.href)}" target="_blank" rel="noopener">Draft in Gmail ↗</a>` : `<label>Subject<input readonly value="${escapeHtml(subject)}" /></label><div class="outreach-email-preview" aria-label="Outreach email preview">${emailPreview(body)}</div><a class="gmail-draft-button" href="${escapeHtml(gmailUrl.href)}" target="_blank" rel="noopener">Draft in Gmail ↗</a><small>Key request lines are highlighted in this preview. Gmail opens a plain-text draft and does not send anything.</small>`}
       ${action || awaitingReply}
     </section>`;
 }
 
 function valuationQuestions(property, analysis) {
   return [
-    property.asking_price ? `Confirm the asking price (${euros(property.asking_price)}), exactly what is included, and the seller's flexibility.` : "Confirm the asking price, what is included, and the seller's flexibility.",
-    property.living_area_sqm ? `Verify the legal living area (${property.living_area_sqm} m²), floor plan, floor level, balcony/cellar/parking and any non-living space.` : "Verify the legal living area, floor plan, ancillary space and any included parking.",
     "Establish vacancy or tenancy: current rent, deposit, indexation, tenant duration, notice position and realistic market rent.",
     "Request the last three owners' association minutes, reserve balance, house rules and all planned or approved special assessments.",
     "Break down monthly service charges into recoverable and non-recoverable costs, plus property tax and insurance.",
     "Confirm condition and dates of major works: roof, façade, windows, heating, electrics, plumbing, bathrooms and kitchen.",
     "Review the energy certificate, heating system, energy class and likely efficiency upgrades or regulatory costs.",
     "Check title and legal constraints: leasehold, easements, occupancy rights, heritage restrictions and outstanding liabilities.",
-    analysis.thesis ? `Test the valuation thesis against the listing claims: ${analysis.thesis}` : "Ask why the seller is moving and which documents support the stated condition and value.",
+    analysis.thesis ? `Test the valuation thesis against the listing claims: ${analysis.thesis}` : "Understand the seller's timing, decision process and appetite for a straightforward transaction.",
   ];
 }
 
@@ -479,19 +801,53 @@ function contactWorkspacePanels(deal) {
 function financialDefaults(deal) {
   const property = deal.state?.property || {};
   const area = Number(property.living_area_sqm) || 0;
+  const price = Number(property.asking_price?.amount) || 0;
+  const pricePerSqm = area ? price / area : 0;
   const annualRent = Number(property.annual_rent?.amount) || 0;
   const evidence = (property.evidence || []).map((item) => item.excerpt || "").join(" ");
   const monthlyRent = Number(evidence.match(/(?:kaltmiete|nettokaltmiete)\s*[:\-]?\s*(?:ca\.?\s*)?([\d.]+(?:,\d+)?)/i)?.[1]?.replace(/\./g, "").replace(",", ".")) || 0;
-  const needsRenovation = /renovierungsbedürftig|sanierungsbedürftig|renovation_needed|modernisierungsbedürftig/i.test(`${property.condition || ""} ${property.description || ""} ${evidence}`);
+  const monthlyServiceCharge = Number(evidence.match(/(?:hausgeld|wohngeld)\s*[:\-]?\s*(?:ca\.?\s*)?([\d.]+(?:,\d+)?)/i)?.[1]?.replace(/\./g, "").replace(",", ".")) || 0;
+  const listingText = `${property.condition || ""} ${property.description || ""} ${evidence} ${(property.features || []).join(" ")}`;
+  const needsRenovation = /renovierungsbedürftig|sanierungsbedürftig|renovation_needed|modernisierungsbedürftig/i.test(listingText);
   const isLet = annualRent > 0 || monthlyRent > 0 || /vermietet|mieteinnahmen/i.test(evidence);
+  const buildYear = Number(property.build_year) || 0;
+  const energyClass = propertyEnergyClass(property);
+  const energyRisk = ["E", "F", "G"].includes(energyClass);
+  const olderBuilding = buildYear > 0 && buildYear < 1985;
+  const priceGap = Number(deal.state?.analysis?.valuation?.price_gap_percent);
+  const hasBrokerFee = /(?:käuferprovision|courtage|provision)\b/i.test(listingText);
+  const noBrokerFee = /provisionsfrei|ohne\s+provision/i.test(listingText);
+  const targetYield = pricePerSqm >= 5000 ? 0.032 : pricePerSqm >= 3200 ? 0.04 : 0.048;
+  const derivedRent = area && price ? price * targetYield / area / 12 : 18;
+  const renovationRate = needsRenovation ? 0.08 : energyRisk ? 0.035 : olderBuilding ? 0.02 : 0;
+  const assumptionBasis = [];
+  if (annualRent || monthlyRent) assumptionBasis.push("rent stated in the listing");
+  else if (pricePerSqm) assumptionBasis.push("asking price and size");
+  if (monthlyServiceCharge) assumptionBasis.push("stated monthly service charge");
+  if (needsRenovation || energyRisk || olderBuilding) assumptionBasis.push("building condition, age or energy data");
+  if (Number.isFinite(priceGap)) assumptionBasis.push("comparable-market price gap");
   return {
-    purchasePrice: Number(property.asking_price?.amount) || 0,
-    renovation: needsRenovation ? Math.round((Number(property.asking_price?.amount) || 0) * 0.08 / 1000) * 1000 : 0,
-    acquisitionCostRate: 0.085, rentPerSqm: area && (annualRent || monthlyRent) ? (annualRent || monthlyRent * 12) / area / 12 : 18,
-    occupancy: isLet ? 0.97 : 0.9, rentGrowth: 0.03, appreciation: 0.02, loanToValue: 1, interestRate: 0.045,
-    repaymentRate: 0.01, nonRecoverable: 80, management: 50, maintenancePerSqm: needsRenovation ? 0.75 : 0.5,
-    repairs: needsRenovation ? 2000 : 1000, insurance: 600, taxRate: 0.35, landShare: 0.1, depreciationRate: 0.025,
-    maintenanceDeductionYears: 5, furniture: 0,
+    purchasePrice: price,
+    renovation: Math.round(price * renovationRate / 1000) * 1000,
+    acquisitionCostRate: noBrokerFee ? 0.075 : hasBrokerFee ? 0.1 : 0.09,
+    rentPerSqm: area && (annualRent || monthlyRent) ? (annualRent || monthlyRent * 12) / area / 12 : derivedRent,
+    occupancy: isLet ? 0.97 : 0.92,
+    rentGrowth: isLet ? 0.02 : 0.025,
+    appreciation: Number.isFinite(priceGap) ? (priceGap > 10 ? 0.012 : priceGap < -10 ? 0.025 : 0.018) : 0.02,
+    loanToValue: price >= 600000 ? 0.8 : price >= 350000 ? 0.85 : 0.9,
+    interestRate: 0.045,
+    repaymentRate: 0.015,
+    nonRecoverable: monthlyServiceCharge ? Math.round(monthlyServiceCharge * 0.3) : Math.max(45, Math.round(area * 1.15)),
+    management: Math.max(30, Math.round(area * 0.65)),
+    maintenancePerSqm: needsRenovation ? 0.9 : energyRisk || olderBuilding ? 0.7 : 0.45,
+    repairs: needsRenovation ? Math.max(3000, Math.round(price * 0.01 / 500) * 500) : energyRisk || olderBuilding ? 1800 : 900,
+    insurance: Math.max(350, Math.round(area * 7)),
+    taxRate: 0.35,
+    landShare: 0.1,
+    depreciationRate: 0.025,
+    maintenanceDeductionYears: 5,
+    furniture: 0,
+    assumptionBasis,
   };
 }
 
@@ -559,6 +915,26 @@ function financialScenarioKey(threadId, scenario) {
   return `propertyscout-financials:${threadId}:${scenario}`;
 }
 
+function negotiationTactic(deal) {
+  const property = deal.state?.property || {};
+  const asking = Number(property.asking_price?.amount) || 0;
+  const valuation = Number(deal.state?.valuation?.estimated_value?.amount || deal.state?.valuation?.estimated_price?.amount || deal.state?.market_basis?.estimated_value?.amount) || 0;
+  const comparablePrices = (deal.state?.comparable_selections || [])
+    .map((selection) => Number(selection.listing?.asking_price?.amount))
+    .filter(Boolean)
+    .sort((a, b) => a - b);
+  const median = comparablePrices.length ? comparablePrices[Math.floor(comparablePrices.length / 2)] : 0;
+  const reference = valuation || median;
+  if (!asking || !reference) return `<section class="negotiation-tactic"><p class="eyebrow">Negotiation tactic</p><h5>Build the evidence first</h5><p>No comparable-backed valuation is available yet. Ask for the exposé, recent owners’ association minutes, energy certificate, rent schedule, and condition evidence before making a price case.</p></section>`;
+  const opening = Math.round(Math.min(asking, reference) * 0.95 / 1000) * 1000;
+  const target = Math.round(Math.min(asking, reference) * 0.98 / 1000) * 1000;
+  const gap = asking - reference;
+  const rationale = gap > 0
+    ? `The asking price is ${financialEuros(gap)} above the comparable-based reference. Lead with the valuation and ask the broker to explain the premium using condition, rent, or building evidence.`
+    : `The asking price is already below the comparable-based reference. Use the bid to protect against unresolved condition, energy, and owners’ association risks rather than claiming the home is overpriced.`;
+  return `<section class="negotiation-tactic"><p class="eyebrow">Negotiation tactic</p><h5>Open at ${financialEuros(opening)} · target ${financialEuros(target)}</h5><p>${escapeHtml(rationale)}</p><small>Reference: ${financialEuros(reference)}${comparablePrices.length ? ` from ${comparablePrices.length} selected comparable${comparablePrices.length === 1 ? "" : "s"}` : " from the market valuation"}. This is a negotiation aid, not a formal appraisal.</small></section>`;
+}
+
 function financialPanel(deal) {
   const property = deal.state?.property || {};
   const scenario = localStorage.getItem(`propertyscout-financial-scenario:${deal.thread_id}`) || "base";
@@ -566,7 +942,10 @@ function financialPanel(deal) {
   const price = property.asking_price?.amount || 0;
   const area = property.living_area_sqm || 0;
   const assumptionGroups = financialAssumptionGroups(defaults);
-  return `<section class="financial-panel" data-financial-thread="${escapeHtml(deal.thread_id)}" data-financial-scenario="${scenario}"><div class="financial-header"><div><h4>10-year financial evaluation</h4><p>Adjust the assumptions, then use the model to compare cash flow, financing, tax and wealth over ten years.</p></div><label class="financial-scenario">Scenario<select data-financial-scenario-select><option value="base"${scenario === "base" ? " selected" : ""}>Base case</option><option value="conservative"${scenario === "conservative" ? " selected" : ""}>Conservative</option><option value="optimistic"${scenario === "optimistic" ? " selected" : ""}>Optimistic</option></select><small>Stored for this deal in this browser</small></label></div><div class="financial-layout"><aside class="financial-deal-card"><span>Selected property</span><strong>${escapeHtml(property.title || "Untitled property")}</strong><p>${escapeHtml([property.postal_code, property.city].filter(Boolean).join(" "))}</p><button type="button" class="deal-delete-button financial-delete-button">Delete deal</button><dl><div><dt>Purchase price</dt><dd data-financial-purchase-price>${financialEuros(price)}</dd></div><div><dt>Living area</dt><dd>${area ? `${area} m²` : "n.a."}</dd></div><div><dt>Rooms</dt><dd>${property.room_count || "n.a."}</dd></div><div><dt>Price / m²</dt><dd data-financial-price-sqm>${price && area ? financialEuros(price / area) : "n.a."}</dd></div></dl></aside><div class="financial-assumptions"><h5>Key assumptions</h5><p class="financial-assumption-guide">Editable inputs that drive the purchase cost, rental income, loan, ownership costs and tax estimate.</p>${assumptionGroups}</div><div class="financial-results"><div class="financial-kpis"><div><span>Year 1 cash flow incl. initial cash</span><strong data-financial-metric="cashflow"></strong></div><div><span>Loan amount</span><strong data-financial-metric="loan"></strong></div><div><span>Year 10 equity</span><strong data-financial-metric="equity"></strong></div><div><span>10-year wealth effect</span><strong data-financial-metric="wealth"></strong></div><div><span>Initial cash required</span><strong data-financial-metric="initial"></strong></div></div><div class="financial-charts"><figure><figcaption>Annual cash flow after tax, including initial cash in Year 1</figcaption><canvas data-financial-chart="cashflow" width="500" height="180"></canvas></figure><figure><figcaption>Property value vs. net equity</figcaption><canvas data-financial-chart="equity" width="500" height="180"></canvas></figure><figure><figcaption>Rental income vs. ownership costs</figcaption><canvas data-financial-chart="income-costs" width="500" height="180"></canvas></figure><figure><figcaption>Total wealth effect</figcaption><canvas data-financial-chart="wealth" width="500" height="180"></canvas></figure></div></div></div><div class="financial-table-wrap"><table class="financial-table"><thead><tr><th>Year</th><th>Rental income</th><th>Cash flow after tax</th><th>Property value</th><th>Net equity</th><th>Total wealth effect</th></tr></thead><tbody data-financial-table></tbody></table></div></section>`;
+  const basis = defaults.assumptionBasis.length
+    ? `Starting values use this listing’s ${defaults.assumptionBasis.join(", ")}.`
+    : "Starting values use the available listing facts. Review and adjust them for your own financing and tax position.";
+  return `<section class="financial-panel" data-financial-thread="${escapeHtml(deal.thread_id)}" data-financial-scenario="${scenario}"><div class="financial-header"><div><h4>10-year financial evaluation</h4><p>Adjust the assumptions, then use the model to compare cash flow, financing, tax and wealth over ten years.</p><p class="financial-review-reminder"><strong>Review &amp; adjust the assumptions below with the seller or broker. Keep them conservative.</strong></p></div><label class="financial-scenario">Scenario<select data-financial-scenario-select><option value="base"${scenario === "base" ? " selected" : ""}>Base case</option><option value="conservative"${scenario === "conservative" ? " selected" : ""}>Conservative</option><option value="optimistic"${scenario === "optimistic" ? " selected" : ""}>Optimistic</option></select><small>Stored for this deal in this browser</small></label></div><div class="financial-layout"><aside class="financial-deal-card"><span>Selected property</span><strong>${escapeHtml(property.title || "Untitled property")}</strong><p>${escapeHtml([property.postal_code, property.city].filter(Boolean).join(" "))}</p><div class="financial-deal-actions"><button type="button" class="ghost-button financial-documents-button">Documents & contracts</button><button type="button" class="deal-delete-button financial-delete-button">Delete deal</button></div><dl><div><dt>Purchase price</dt><dd data-financial-purchase-price>${financialEuros(price)}</dd></div><div><dt>Living area</dt><dd>${area ? `${area} m²` : "n.a."}</dd></div><div><dt>Rooms</dt><dd>${property.room_count || "n.a."}</dd></div><div><dt>Price / m²</dt><dd data-financial-price-sqm>${price && area ? financialEuros(price / area) : "n.a."}</dd></div></dl></aside><div class="financial-assumptions"><h5>Key assumptions</h5><p class="financial-assumption-guide">${escapeHtml(basis)}</p><button type="button" class="ghost-button financial-reset-button" data-financial-reset>Reset to listing-based values</button>${assumptionGroups}</div><div class="financial-results"><div class="financial-kpis"><div><span>Year 1 cash flow incl. initial cash</span><strong data-financial-metric="cashflow"></strong></div><div><span>Loan amount</span><strong data-financial-metric="loan"></strong></div><div><span>Year 10 equity</span><strong data-financial-metric="equity"></strong></div><div><span>10-year wealth effect</span><strong data-financial-metric="wealth"></strong></div><div><span>10-year ROI on initial cash</span><strong data-financial-metric="roi"></strong></div><div><span>Initial cash required</span><strong data-financial-metric="initial"></strong></div></div><div class="financial-charts"><figure><figcaption>Annual cash flow after tax, including initial cash in Year 1</figcaption><canvas data-financial-chart="cashflow" width="500" height="180"></canvas></figure><figure><figcaption>Property value vs. net equity</figcaption><canvas data-financial-chart="equity" width="500" height="180"></canvas></figure><figure><figcaption>Rental income vs. ownership costs</figcaption><canvas data-financial-chart="income-costs" width="500" height="180"></canvas></figure><figure><figcaption>Total wealth effect</figcaption><canvas data-financial-chart="wealth" width="500" height="180"></canvas></figure></div>${negotiationTactic(deal)}</div></div><div class="financial-table-wrap"><table class="financial-table"><thead><tr><th>Year</th><th>Rental income</th><th>Cash flow after tax</th><th>Property value</th><th>Net equity</th><th>Total wealth effect</th></tr></thead><tbody data-financial-table></tbody></table></div></section>`;
 }
 
 function financialValues(panel, deal) {
@@ -663,6 +1042,7 @@ function renderFinancialPanel(panel, deal) {
   panel.querySelector("[data-financial-metric='equity']").textContent = financialEuros(last.equity);
   panel.querySelector("[data-financial-metric='wealth']").textContent = financialEuros(last.wealth);
   panel.querySelector("[data-financial-metric='initial']").textContent = financialEuros(first.initialCash);
+  panel.querySelector("[data-financial-metric='roi']").textContent = first.initialCash > 0 ? percent((last.wealth - first.initialCash) / first.initialCash) : "n.a.";
   panel.querySelector("[data-financial-purchase-price]").textContent = financialEuros(inputs.purchasePrice);
   panel.querySelector("[data-financial-price-sqm]").textContent = property.living_area_sqm
     ? financialEuros(inputs.purchasePrice / property.living_area_sqm)
@@ -701,6 +1081,11 @@ function initialiseFinancialPanel(card, deal) {
     localStorage.setItem(`propertyscout-financial-scenario:${deal.thread_id}`, scenario);
     loadScenario(scenario);
   });
+  panel.querySelector("[data-financial-reset]")?.addEventListener("click", () => {
+    const scenario = panel.dataset.financialScenario || "base";
+    localStorage.removeItem(financialScenarioKey(deal.thread_id, scenario));
+    loadScenario(scenario);
+  });
   panel.dataset.initialised = "true";
   renderFinancialPanel(panel, deal);
 }
@@ -721,6 +1106,19 @@ function wireContactPanels(card) {
       }
     });
   });
+  card.querySelector("[data-enrich-contact]")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = "Refreshing listing facts…";
+    const response = await fetch(`/deals/${card.dataset.threadId}/enrich-contact`, { method: "POST" });
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      button.disabled = false;
+      button.textContent = result.detail || "Could not refresh listing facts";
+      return;
+    }
+    await loadDeals();
+  });
 }
 
 function dealHistory(deal) {
@@ -735,9 +1133,21 @@ function dealHistory(deal) {
 
 function primaryDealAction(deal) {
   if (dealPipelineTab(deal) === "contact") return "Open contact tools";
-  if (deal.status === "waiting_human") return "Review decision";
-  if (deal.status === "rejected") return "Review analysis";
-  return "Open analysis";
+  if (deal.status === "waiting_human") return "Open decision review";
+  if (deal.status === "rejected") return "Open analysis review";
+  return "Open deal review";
+}
+
+function rejectionExplanation(deal) {
+  if (deal.status !== "rejected") return "";
+  const state = deal.state || {};
+  const reasons = state.scout_assessment?.reasons;
+  if (Array.isArray(reasons) && reasons.length) return reasons.join(" · ");
+  if (state.analysis?.thesis) return state.analysis.thesis;
+  const rejectedApproval = Object.values(state.approvals || {}).find(
+    (approval) => approval?.decision === "rejected" && approval.feedback,
+  );
+  return rejectedApproval?.feedback || "";
 }
 
 function dealCard(deal) {
@@ -759,6 +1169,8 @@ function dealCard(deal) {
   const cashFlow = analysis.metrics?.monthly_cash_flow;
   const listingUrl = safeHttpUrl(property.listing_url);
   const comparableCount = state.comparable_selections?.length ?? 0;
+  const rejectionReason = rejectionExplanation(deal);
+  const listingKind = listingContactContext(property, state.selected_contact || state.contact_candidates?.[0]);
   const dealLinks = [
     listingUrl
       ? `<a class="deal-source-link" href="${escapeHtml(listingUrl)}" target="_blank" rel="noopener">View listing ↗</a>`
@@ -770,23 +1182,26 @@ function dealCard(deal) {
     <div class="result-meta">
       <span>${escapeHtml(property.postal_code || property.city || "")}</span>
       <span class="status ${meta.cls}">${meta.label}</span>
+      ${rejectionReason ? `<span class="rejection-explanation" title="${escapeHtml(rejectionReason)}">${escapeHtml(rejectionReason)}</span>` : ""}
       ${comparisonMode ? `<label class="compare-choice"><input type="checkbox" data-compare-choice ${comparisonThreadIds.has(deal.thread_id) ? "checked" : ""} /> Compare</label>` : ""}
       <button type="button" class="deal-delete-button" aria-label="Delete this deal">Delete</button>
     </div>
     <h3>${escapeHtml(property.title || "Untitled property")}</h3>
     <div class="deal-metrics">
-      <span class="score-badge">Deal Score ${score == null ? "—" : `${score}/100`}</span>
+      <button type="button" class="score-badge score-explainer" data-score-explanation aria-expanded="false" title="Explain deal score">Deal Score ${score == null ? "—" : `${score}/100`} <span aria-hidden="true">?</span></button>
       <span>${percent(yieldValue)} gross yield</span>
       <span>${cashFlow ? `${euros(cashFlow)}/mo` : "—"}</span>
       <span>${property.build_year ? `Built ${property.build_year}` : "—"}</span>
       <span>${property.energy_class ? `Energy ${escapeHtml(property.energy_class)}` : "—"}</span>
+      <span class="listing-kind ${listingKind.uncertain ? "uncertain" : ""}" title="${escapeHtml(listingKind.detail)}">${listingKind.uncertain ? "◌" : listingKind.label.startsWith("Broker") ? "▣" : "◇"} ${escapeHtml(listingKind.label.replace(" listing", ""))}</span>
     </div>
     <p class="deal-summary">${escapeHtml(summary)}</p>
-    <button type="button" class="primary-deal-action" data-deal-details aria-expanded="false">${primaryDealAction(deal)}</button>
+    <button type="button" class="decision-review-toggle" data-deal-details aria-expanded="false" aria-label="${primaryDealAction(deal)}" title="${primaryDealAction(deal)}">⌄</button>
     <div class="deal-details" hidden>
       <div class="deal-links">${dealLinks}</div>
       ${comparablePanelHTML(state.comparable_selections || [])}
       ${propertyMetrics(property)}
+      ${scoreExplanationPanel(analysis)}
       ${valuationPanel(state)}
       ${propertyFeaturePanel(property, analysis)}
       ${missingDataPanel(analysis, deal.status)}
@@ -809,13 +1224,38 @@ function dealCard(deal) {
   card.addEventListener("focusin", () => focusWorkflowDeal(deal));
   wireComparablePanel(card, state.current_stage, comparableCount);
   wireContactPanels(card);
+  card.querySelector("[data-score-explanation]")?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const details = card.querySelector(".deal-details");
+    const panel = card.querySelector("[data-score-panel]");
+    if (!panel) return;
+    details.hidden = false;
+    panel.hidden = !panel.hidden;
+    const expanded = !panel.hidden;
+    event.currentTarget.setAttribute("aria-expanded", String(expanded));
+    event.currentTarget.title = expanded ? "Hide deal score explanation" : "Explain deal score";
+    const reviewToggle = card.querySelector("[data-deal-details]");
+    if (reviewToggle) {
+      reviewToggle.textContent = "⌃";
+      reviewToggle.setAttribute("aria-expanded", "true");
+      reviewToggle.setAttribute("aria-label", "Close decision review");
+      reviewToggle.title = "Close decision review";
+    }
+  });
   card.querySelector("[data-deal-details]")?.addEventListener("click", (event) => {
     event.stopPropagation();
     const details = card.querySelector(".deal-details");
     const opening = details.hidden;
     details.hidden = !opening;
+    if (!opening) {
+      card.querySelector("[data-score-panel]")?.setAttribute("hidden", "");
+      card.querySelector("[data-score-explanation]")?.setAttribute("aria-expanded", "false");
+    }
     event.currentTarget.setAttribute("aria-expanded", String(opening));
-    event.currentTarget.textContent = opening ? "Hide details" : primaryDealAction(deal);
+    const label = opening ? "Close decision review" : primaryDealAction(deal);
+    event.currentTarget.textContent = opening ? "⌃" : "⌄";
+    event.currentTarget.setAttribute("aria-label", label);
+    event.currentTarget.title = label;
   });
   card.querySelector("[data-compare-choice]")?.addEventListener("change", (event) => {
     if (event.target.checked) {
@@ -864,42 +1304,54 @@ function financialDealPicker(deals, selectedThreadId) {
 }
 
 function renderDealTabs(deals) {
-  const counts = { analyze: 0, contact: 0 };
+  const counts = { analyze: 0, contact: 0, documents: 0 };
   deals.forEach((deal) => { counts[dealPipelineTab(deal)] += 1; });
   const financialCount = deals.filter((deal) => financialDealThreadIds.has(deal.thread_id)).length;
-  dealTabs.replaceChildren(...DEAL_TABS.map(({ id, label }) => {
+  const documentCount = deals.filter((deal) => documentDealThreadIds.has(deal.thread_id)).length;
+  dealTabs.replaceChildren(...DEAL_TABS.map(({ id, label, icon }) => {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `deal-tab${id === activeDealTab ? " active" : ""}`;
+    // Learning pages can load the deal data in the background. Only highlight
+    // a pipeline stage when that stage is the page the investor is viewing.
+    const isCurrentWorkspace = activeSidebarItem === id;
+    button.className = `deal-tab${isCurrentWorkspace ? " active" : ""}`;
     button.setAttribute("role", "tab");
-    button.setAttribute("aria-selected", String(id === activeDealTab));
-    button.textContent = id === "financials" ? `${label} (${financialCount})` : `${label} (${counts[id]})`;
+    button.setAttribute("aria-selected", String(isCurrentWorkspace));
+    const count = id === "financials" ? financialCount : id === "documents" ? documentCount : counts[id];
+    button.innerHTML = `<span class="stage-icon" aria-hidden="true">${icon}</span><span>${label} (${count})</span>`;
     button.addEventListener("click", () => {
       activeDealTab = id;
       renderDashboard(deals);
+      dashboardSection.scrollIntoView({ behavior: "smooth", block: "start" });
     });
     return button;
   }));
+  document.querySelector("[data-scout-nav]")?.classList.toggle("active", activeSidebarItem === "scout");
 }
 
 function renderPipelineSummary(deals) {
   const counts = {
-    all: deals.length,
-    action: deals.filter((deal) => deal.status === "waiting_human").length,
+    analyze: deals.filter((deal) => dealPipelineTab(deal) === "analyze").length,
     contact: deals.filter((deal) => dealPipelineTab(deal) === "contact").length,
     financial: deals.filter((deal) => financialDealThreadIds.has(deal.thread_id)).length,
+    documents: deals.filter((deal) => documentDealThreadIds.has(deal.thread_id)).length,
   };
   pipelineSummary.innerHTML = [
-    ["all", "All deals", counts.all],
-    ["action", "Needs your action", counts.action],
+    ["analyze", "Analyze", counts.analyze],
     ["contact", "Contact work", counts.contact],
     ["financial", "Financial estimates", counts.financial],
-  ].map(([kind, label, count]) => `<button type="button" class="pipeline-stat ${kind}" data-pipeline-stat="${kind}"><strong>${count}</strong><span>${label}</span></button>`).join("");
+    ["documents", "Documents & contract", counts.documents],
+  ].map(([kind, label, count]) => {
+    const tab = kind === "financial" ? "financials" : kind;
+    return `<button type="button" class="pipeline-stat ${kind}${activeDealTab === tab ? " active" : ""}" data-pipeline-stat="${kind}"><strong>${count}</strong><span>${label}</span></button>`;
+  }).join("");
   pipelineSummary.querySelectorAll("[data-pipeline-stat]").forEach((button) => button.addEventListener("click", () => {
     const kind = button.dataset.pipelineStat;
     if (kind === "contact") activeDealTab = "contact";
     else if (kind === "financial") activeDealTab = "financials";
-    else { activeDealTab = "analyze"; dealView.status = kind === "action" ? "needs-action" : "all"; dealStatusFilter.value = dealView.status; }
+    else if (kind === "documents") activeDealTab = "documents";
+    else { activeDealTab = "analyze"; dealView.status = "all"; dealStatusFilter.value = dealView.status; }
+    activeSidebarItem = activeDealTab;
     renderDashboard(deals);
   }));
 }
@@ -959,7 +1411,65 @@ function wireComparablePanel(card, stage, comparableCount) {
   });
 }
 
-dealGrid.addEventListener("click", (event) => {
+const STANDARD_PURCHASE_DOCUMENTS = [
+  ["Land-register extract", ["grundbuch", "land register"]],
+  ["Draft purchase contract", ["kaufvertrag", "purchase contract", "vertragsentwurf"]],
+  ["Energy certificate", ["energieausweis", "energy certificate"]],
+  ["Floor plan", ["grundriss", "floor plan"]],
+  ["Living-area calculation", ["wohnflaeche", "wohnfläche", "living area"]],
+  ["Building description", ["baubeschreibung", "building description", "expose", "exposé"]],
+  ["Renovation and maintenance evidence", ["sanierung", "modernisierung", "renovierung", "instandhaltung"]],
+  ["Building-insurance evidence", ["versicherung", "insurance"]],
+  ["Property handover record", ["uebergabe", "übergabe", "handover"]],
+  ["Proof of ownership and seller authority", ["vollmacht", "power of attorney", "eigentum"]],
+];
+
+function normalizedDocumentName(value) {
+  return String(value || "").toLocaleLowerCase("de-DE")
+    .replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue").replace(/ß/g, "ss");
+}
+
+function listingSpecificDocuments(deal) {
+  const property = deal.state?.property || {};
+  const listingText = normalizedDocumentName(`${property.property_type || ""} ${property.description || ""} ${(property.features || []).join(" ")}`);
+  const isApartment = /apartment|wohnung|eigentumswohnung/.test(listingText);
+  const isLet = Boolean(property.annual_rent) || /vermietet|mietvertrag|tenant/.test(listingText);
+  const requirements = isApartment
+    ? [
+      ["Declaration of division", ["teilungserklaerung", "declaration of division"]],
+      ["Community rules", ["gemeinschaftsordnung", "community rules"]],
+      ["Allocation plan", ["aufteilungsplan", "allocation plan"]],
+      ["Last 3–5 owners’ meeting minutes", ["eigentuemerversammlung", "protokoll", "weg"]],
+      ["Current economic plan", ["wirtschaftsplan", "economic plan"]],
+      ["Last 3 annual accounts", ["jahresabrechnung", "annual account"]],
+      ["Reserve / asset report", ["vermoegensbericht", "ruecklage", "reserve"]],
+      ["Resolution collection", ["beschlusssammlung", "resolution"]],
+    ]
+    : [
+      ["Cadastral map and site plan", ["flurkarte", "lageplan", "cadastral", "site plan"]],
+      ["Building permits and approvals", ["baugenehmigung", "building permit", "genehmigung"]],
+      ["Utility and development-cost evidence", ["erschliessung", "development cost", "anschluss"]],
+      ["Drainage / pipe inspection", ["kanal", "drainage", "rohr"]],
+      ["Contamination and soil information", ["altlast", "contamination", "boden"]],
+      ["Structural, roof and façade reports", ["dach", "fassade", "statik", "structural"]],
+    ];
+  if (isLet) requirements.push(
+    ["Current tenancy agreement", ["mietvertrag", "tenancy agreement"]],
+    ["Rent history and latest service-charge statement", ["mietaufstellung", "miete", "nebenkosten", "service charge"]],
+  );
+  return requirements.slice(0, 10);
+}
+
+function documentChecklistMarkup(title, requirements, files) {
+  const uploadedNames = files.map((file) => normalizedDocumentName(file.name));
+  const rows = requirements.map(([label, keywords]) => {
+    const uploaded = keywords.some((keyword) => uploadedNames.some((name) => name.includes(normalizedDocumentName(keyword))));
+    return `<li class="${uploaded ? "uploaded" : "missing"}"><span aria-hidden="true">${uploaded ? "✓" : "○"}</span><span>${escapeHtml(label)}</span><small>${uploaded ? "Uploaded" : "Request"}</small></li>`;
+  }).join("");
+  return `<section class="document-checklist"><h4>${escapeHtml(title)}</h4><ul>${rows}</ul></section>`;
+}
+
+dealGrid.addEventListener("click", async (event) => {
   const button = event.target.closest("button[data-decision], button[data-action]");
   if (!button) return;
   const card = button.closest(".deal-card");
@@ -976,11 +1486,13 @@ dealGrid.addEventListener("click", (event) => {
 
   if (kind === "shortlist") {
     const feedback = panel.querySelector(".feedback")?.value.trim();
-    send({
+    const approved = button.dataset.decision === "approved";
+    const resumed = await send({
       decision: button.dataset.decision,
       decided_by: "dashboard",
       ...(feedback ? { feedback } : {}),
     });
+    if (approved && resumed) await enrichApprovedListing(deal.thread_id, card);
   } else if (kind === "contact_resolution") {
     send({ contact_id: panel.querySelector(".contact-select")?.value });
   } else if (kind === "outreach") {
@@ -1010,7 +1522,7 @@ dealGrid.addEventListener("click", (event) => {
 });
 
 async function resumeDeal(threadId, payload, confirmMessage, card) {
-  if (confirmMessage && !window.confirm(confirmMessage)) return;
+  if (confirmMessage && !window.confirm(confirmMessage)) return false;
   const cardError = card.querySelector(".card-error");
   cardError.hidden = true;
   try {
@@ -1021,9 +1533,32 @@ async function resumeDeal(threadId, payload, confirmMessage, card) {
     });
     if (!response.ok) throw new Error(await readError(response));
     await loadDeals();
+    return true;
   } catch (error) {
     cardError.textContent = error.message;
     cardError.hidden = false;
+    return false;
+  }
+}
+
+async function enrichApprovedListing(threadId, card) {
+  const cardError = card.querySelector(".card-error");
+  const action = card.querySelector('[data-decision="approved"]');
+  if (action) {
+    action.disabled = true;
+    action.textContent = "Checking listing facts…";
+  }
+  try {
+    const response = await fetch(`/deals/${threadId}/enrich-contact`, { method: "POST" });
+    if (!response.ok) throw new Error(await readError(response));
+    await loadDeals();
+  } catch (error) {
+    cardError.textContent = `Approved and moved to Contact. Listing fact check could not finish: ${error.message}`;
+    cardError.hidden = false;
+    if (action) {
+      action.disabled = false;
+      action.textContent = "Approve";
+    }
   }
 }
 
@@ -1042,7 +1577,12 @@ async function deleteDeal(deal) {
   }
 }
 
-function renderDashboard(deals) {
+function renderDashboard(deals, { showWorkspace = true } = {}) {
+  if (showWorkspace) showDealWorkspace();
+  // Refreshing the page or the deal list should keep the investor in the
+  // workflow stage they were reviewing, rather than returning to Analyze.
+  localStorage.setItem("propertyscout-active-deal-tab", activeDealTab);
+  dealGrid.dataset.stage = activeDealTab;
   dealsByThreadId = new Map(deals.map((deal) => [deal.thread_id, deal]));
   const sorted = [...deals].sort(
     (a, b) => (STATUS_PRIORITY[a.status] ?? 9) - (STATUS_PRIORITY[b.status] ?? 9)
@@ -1082,6 +1622,15 @@ function renderDashboard(deals) {
       dealGrid.replaceChildren(financialView);
       initialiseFinancialPanel(financialView, selectedDeal);
       financialView.querySelector(".financial-delete-button")?.addEventListener("click", () => deleteDeal(selectedDeal));
+      financialView.querySelector(".financial-documents-button")?.addEventListener("click", () => {
+        documentDealThreadIds.add(selectedDeal.thread_id);
+        localStorage.setItem("propertyscout-document-deals", JSON.stringify([...documentDealThreadIds]));
+        selectedDocumentThreadId = selectedDeal.thread_id;
+        activeDealTab = "documents";
+        rememberWorkspace("documents");
+        renderDashboard(Array.from(dealsByThreadId.values()));
+        document.querySelector("#dashboard")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
       financialView.querySelectorAll("[data-financial-deal-choice]").forEach((choice) => {
         choice.addEventListener("click", () => {
           selectedFinancialThreadId = choice.dataset.financialDealChoice;
@@ -1091,7 +1640,69 @@ function renderDashboard(deals) {
       dashboardEmpty.hidden = true;
       focusWorkflowDeal(selectedDeal);
     }
-    dashboardSection.hidden = false;
+    if (showWorkspace) dashboardSection.hidden = false;
+    return;
+  }
+  if (activeDealTab === "documents") {
+    dealControls.hidden = true;
+    dealComparison.hidden = true;
+    const eligibleDocumentDeals = sorted.filter((deal) => documentDealThreadIds.has(deal.thread_id));
+    if (!eligibleDocumentDeals.length) {
+      dealGrid.innerHTML = `<div class="empty-note"><strong>No properties are in Documents & contracts yet.</strong><p>Open a property in Financial Estimates, then choose Documents & contracts to send it here.</p></div>`;
+      dashboardEmpty.hidden = true;
+      if (showWorkspace) dashboardSection.hidden = false;
+      return;
+    }
+    const documentDeals = eligibleDocumentDeals.map((deal) => `<option value="${escapeHtml(deal.thread_id)}"${deal.thread_id === selectedDocumentThreadId ? " selected" : ""}>${escapeHtml(deal.state?.property?.title || "Untitled property")}</option>`).join("");
+    dealGrid.innerHTML = `<section class="document-review"><div class="document-review-heading"><p class="eyebrow">Document & contract review</p><h3>Know what to request before you commit</h3><p>Choose a property, then use the checklist to request the documents that matter. Uploaded files are stored locally and marked automatically when their file name matches a checklist item.</p></div><label class="document-property-select">Property<select data-document-deal>${documentDeals}</select></label><div class="document-workspace"><aside data-document-checklists class="document-checklists"></aside><section class="document-upload-panel"><h4>Upload received documents</h4><label>Listing documents<input data-document-files type="file" multiple accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png" /></label><div class="document-actions"><button type="button" data-document-upload>Save documents locally</button><button type="button" class="ghost-button" data-document-review>Review documents</button></div><p data-document-status></p><div data-document-inventory class="document-results"></div><div data-document-results class="document-results" hidden></div><small>Files stay in this local workspace. PDF, DOCX, and text files can be reviewed immediately; scans use local OCR when it is installed.</small></section></div></section>`;
+    const selectedDocumentDeal = () => dealGrid.querySelector("[data-document-deal]").value;
+    const documentStatus = () => dealGrid.querySelector("[data-document-status]");
+    const documentResults = () => dealGrid.querySelector("[data-document-results]");
+    const documentInventory = () => dealGrid.querySelector("[data-document-inventory]");
+    const documentChecklists = () => dealGrid.querySelector("[data-document-checklists]");
+    const showDocumentInventory = async () => {
+      const response = await fetch(`/deals/${selectedDocumentDeal()}/documents`);
+      const result = await response.json().catch(() => ({}));
+      const files = result.files || [];
+      const deal = eligibleDocumentDeals.find((item) => item.thread_id === selectedDocumentDeal());
+      documentChecklists().innerHTML = `${documentChecklistMarkup("Standard documents for every purchase", STANDARD_PURCHASE_DOCUMENTS, files)}${documentChecklistMarkup("Documents to request for this listing", listingSpecificDocuments(deal || {}), files)}`;
+      documentInventory().innerHTML = files.length
+        ? `<strong>Uploaded documents</strong><ul>${files.map((file) => `<li>${escapeHtml(file.name)} <span>${Number(file.bytes).toLocaleString()} bytes</span></li>`).join("")}</ul>`
+        : "<p>No documents saved for this property yet.</p>";
+    };
+    dealGrid.querySelector("[data-document-upload]")?.addEventListener("click", async () => {
+      const files = dealGrid.querySelector("[data-document-files]").files;
+      const status = documentStatus();
+      if (!files.length) { status.textContent = "Choose at least one document."; return; }
+      const body = new FormData(); [...files].forEach((file) => body.append("files", file));
+      const response = await fetch(`/deals/${selectedDocumentDeal()}/documents`, { method: "POST", body });
+      const result = await response.json();
+      status.textContent = response.ok ? `${result.files.length} document(s) saved locally.` : (result.detail || "Upload failed.");
+      if (response.ok) showDocumentInventory();
+    });
+    dealGrid.querySelector("[data-document-deal]")?.addEventListener("change", (event) => {
+      selectedDocumentThreadId = event.target.value;
+      documentResults().hidden = true;
+      documentResults().innerHTML = "";
+      showDocumentInventory();
+    });
+    dealGrid.querySelector("[data-document-review]")?.addEventListener("click", async () => {
+      const status = documentStatus();
+      status.textContent = "Reviewing saved document facts…";
+      const response = await fetch(`/deals/${selectedDocumentDeal()}/documents/review`);
+      const review = await response.json();
+      if (!response.ok) { status.textContent = review.detail || "Document review failed."; return; }
+      const discrepancies = review.discrepancies.length
+        ? `<strong>Needs clarification</strong><ul>${review.discrepancies.map((item) => `<li>${escapeHtml(item.document)}: ${escapeHtml(item.field)} is ${escapeHtml(item.document_value)}; listing shows ${escapeHtml(item.listing)}.</li>`).join("")}</ul>`
+        : "<strong>No clear contradictions found in the extracted facts.</strong>";
+      const checklist = review.contract_checklist.map((item) => `<li class="${item.status}"><b>${escapeHtml(item.topic)}</b> — ${escapeHtml(item.guidance)}</li>`).join("");
+      documentResults().innerHTML = `${discrepancies}<strong>Contract checklist</strong><ul>${checklist}</ul><p>${escapeHtml(review.notice)}</p>`;
+      documentResults().hidden = false;
+      status.textContent = `${review.documents.length} document(s) reviewed.`;
+    });
+    showDocumentInventory();
+    dashboardEmpty.hidden = true;
+    if (showWorkspace) dashboardSection.hidden = false;
     return;
   }
   dealControls.hidden = false;
@@ -1104,21 +1715,79 @@ function renderDashboard(deals) {
       : "No deals match these filters. Try another location or status.";
     dashboardEmpty.hidden = false;
   }
-  dealGrid.replaceChildren(...visibleDeals.map(dealCard));
-  dashboardSection.hidden = false;
+  const cards = visibleDeals.map(dealCard);
+  if (activeDealTab === "contact" && visibleDeals.length) {
+    const contactImport = document.createElement("section");
+    const options = visibleDeals.map((deal) => `<option value="${escapeHtml(deal.thread_id)}">${escapeHtml(deal.state?.property?.title || "Untitled property")}</option>`).join("");
+    contactImport.className = "contact-pdf-import";
+    contactImport.innerHTML = `<div><p class="eyebrow">Add contact evidence</p><h3>Read contact details from a PDF</h3><p>Select a property, then upload the broker’s exposé or contact document. PropertyScout keeps the file locally and updates only facts and contact details stated in that document.</p></div><label>Property<select data-contact-pdf-deal>${options}</select></label><label>Contact PDF<input type="file" accept="application/pdf,.pdf" data-contact-pdf /></label><button type="button" data-contact-pdf-upload>Read contact PDF</button><p data-contact-pdf-status role="status"></p>`;
+    contactImport.querySelector("[data-contact-pdf-upload]")?.addEventListener("click", async () => {
+      const file = contactImport.querySelector("[data-contact-pdf]").files?.[0];
+      const threadId = contactImport.querySelector("[data-contact-pdf-deal]").value;
+      const status = contactImport.querySelector("[data-contact-pdf-status]");
+      if (!file) { status.textContent = "Choose a contact PDF first."; return; }
+      const action = contactImport.querySelector("[data-contact-pdf-upload]");
+      action.disabled = true;
+      action.textContent = "Reading PDF…";
+      const body = new FormData();
+      body.append("file", file);
+      try {
+        const response = await fetch(`/deals/${threadId}/contact-pdf`, { method: "POST", body });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.detail || "Could not read this PDF.");
+        status.textContent = "Contact evidence added to the selected property.";
+        await loadDeals();
+      } catch (error) {
+        status.textContent = error.message;
+        action.disabled = false;
+        action.textContent = "Read contact PDF";
+      }
+    });
+    cards.unshift(contactImport);
+  }
+  if (activeDealTab === "analyze") {
+    const importCard = document.createElement("section");
+    importCard.className = "analyze-pdf-import";
+    importCard.innerHTML = `<div><p class="eyebrow">Add a property</p><h3>Start analysis from a PDF exposé</h3><p>Upload one property PDF. We extract stated facts locally, then check for supporting online information when a clear listing can be identified.</p></div><label>Property PDF<input type="file" accept="application/pdf,.pdf" data-analyze-pdf /></label><button type="button" data-analyze-pdf-upload>Analyze PDF</button><p data-analyze-pdf-status role="status"></p>`;
+    importCard.querySelector("[data-analyze-pdf-upload]")?.addEventListener("click", async () => {
+      const file = importCard.querySelector("[data-analyze-pdf]").files?.[0];
+      const status = importCard.querySelector("[data-analyze-pdf-status]");
+      if (!file) { status.textContent = "Choose a property PDF first."; return; }
+      const action = importCard.querySelector("[data-analyze-pdf-upload]");
+      action.disabled = true;
+      action.textContent = "Creating analysis…";
+      status.textContent = "Reading the PDF and checking available online evidence…";
+      const body = new FormData();
+      body.append("file", file);
+      try {
+        const response = await fetch("/deals/import-pdf", { method: "POST", body });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.detail || "Could not add this PDF.");
+        status.textContent = "Added to Analyze.";
+        await loadDeals();
+      } catch (error) {
+        status.textContent = error.message;
+        action.disabled = false;
+        action.textContent = "Analyze PDF";
+      }
+    });
+    cards.unshift(importCard);
+  }
+  dealGrid.replaceChildren(...cards);
+  if (showWorkspace) dashboardSection.hidden = false;
 }
 
-async function loadDeals() {
+async function loadDeals({ showWorkspace = true } = {}) {
   try {
     const response = await fetch("/deals");
     if (!response.ok) throw new Error("Could not load deals.");
     const deals = await response.json();
-    renderDashboard(deals);
+    renderDashboard(deals, { showWorkspace });
   } catch (error) {
     dealGrid.replaceChildren();
     dashboardEmpty.textContent = error.message;
     dashboardEmpty.hidden = false;
-    dashboardSection.hidden = false;
+    if (showWorkspace) dashboardSection.hidden = false;
   }
 }
 
@@ -1131,7 +1800,14 @@ dealCompareToggle.addEventListener("click", () => {
   if (!comparisonMode) comparisonThreadIds.clear();
   renderDashboard(Array.from(dealsByThreadId.values()));
 });
-loadDeals();
+document.querySelector("[data-scout-nav]")?.addEventListener("click", () => {
+  showScoutWorkspace({ focus: true });
+  loadDiscoveries();
+});
+howItWorksButton?.addEventListener("click", showHowItWorks);
+propertyEducationButton?.addEventListener("click", showPropertyEducation);
+wireHowItWorksCards();
+wireEducationTiles();
 
 const discoverySection = document.querySelector("#discovery");
 const discoveryGrid = document.querySelector("#discovery-grid");
@@ -1151,7 +1827,7 @@ const DISCOVERY_STATUS_META = {
   budget_exhausted: { label: "Budget exhausted", cls: "dis-budget" },
 };
 
-let currentSearchId = null;
+let currentSearchId = localStorage.getItem("propertyscout-active-discovery") || null;
 
 const eurosPlain = (value) =>
   value == null ? "—" : `EUR ${value.toLocaleString("en-US")}`;
@@ -1215,13 +1891,15 @@ function discoveryCard(record) {
 }
 
 
-let activeDiscoveryTab = "validated";
+let activeDiscoveryTab = localStorage.getItem("propertyscout-active-discovery-tab") || "validated";
 let currentDiscoveryRun = null;
 
 function clearDiscoveryView(message = "No active discovery inventory. Start a property search to scout listings.") {
   currentSearchId = null;
   currentDiscoveryRun = null;
   activeDiscoveryTab = "validated";
+  localStorage.removeItem("propertyscout-active-discovery");
+  localStorage.removeItem("propertyscout-active-discovery-tab");
   discoveryGrid.replaceChildren();
   document.querySelector("#discovery-tabs")?.replaceChildren();
   discoveryDiagnostics.replaceChildren();
@@ -1234,9 +1912,7 @@ function clearDiscoveryView(message = "No active discovery inventory. Start a pr
 function renderDiscovery(run) {
   currentSearchId = run.search_id;
   currentDiscoveryRun = run;
-
-  // Default to validated listings for every new search.
-  activeDiscoveryTab = "validated";
+  localStorage.setItem("propertyscout-active-discovery", currentSearchId);
 
   const counts = run.counts || {};
   const total = Object.values(counts).reduce(
@@ -1245,6 +1921,9 @@ function renderDiscovery(run) {
 
   const diagnostics = [
     `${total} discovered item(s)`,
+    run.keenable_credits_used == null
+      ? "Keenable usage was not recorded for this older search"
+      : `${run.keenable_credits_used} Keenable credit(s) used`,
     `${run.search_calls} search call(s)`,
     `${run.index_fetches} index fetch(es)`,
     `${run.detail_fetches} detail fetch(es)`,
@@ -1330,6 +2009,7 @@ function renderDiscoveryTabs() {
     tabs.querySelectorAll(".discovery-tab").forEach((button) => {
       button.addEventListener("click", () => {
         activeDiscoveryTab = button.dataset.tab;
+        localStorage.setItem("propertyscout-active-discovery-tab", activeDiscoveryTab);
         renderDiscoveryTabs();
       });
     });
@@ -1436,7 +2116,33 @@ clearDiscoveriesButton.addEventListener("click", async () => {
   }
   clearDiscoveryView("Discovery inventory cleared. Your deals are unchanged.");
 });
-clearDiscoveryView();
+function restoreLastWorkspace() {
+  if (activeSidebarItem === "property-education") {
+    showPropertyEducation();
+    return;
+  }
+  if (activeSidebarItem === "how-it-works") {
+    showHowItWorks();
+    return;
+  }
+  if (activeSidebarItem === "scout") {
+    showScoutWorkspace();
+    return;
+  }
+  if (["analyze", "contact", "financials", "documents"].includes(activeSidebarItem)) {
+    activeDealTab = activeSidebarItem;
+    showDealWorkspace();
+    return;
+  }
+  showScoutWorkspace();
+}
+
+restoreLastWorkspace();
+loadDeals({ showWorkspace: false });
+if (activeSidebarItem === "scout") {
+  if (currentSearchId) loadDiscoveries(currentSearchId);
+  else clearDiscoveryView();
+}
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();

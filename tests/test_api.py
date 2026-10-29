@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from propertyscout.api import create_app, derive_workflow_status
+from propertyscout.api import _pdf_import_listing, create_app, derive_workflow_status
 from propertyscout.graph import create_state_serializer
 from propertyscout.discovery import DiscoveryService
 from propertyscout.fixtures import sample_properties
@@ -39,6 +39,42 @@ def test_api_starts_lists_and_reads_persisted_deals(tmp_path) -> None:
 
     listed = client.get("/deals")
     assert [deal["thread_id"] for deal in listed.json()] == [created["thread_id"]]
+
+
+def test_pdf_import_listing_extracts_plainly_stated_property_facts() -> None:
+    listing = _pdf_import_listing(
+        """
+        Helle Eigentumswohnung in Essen
+        Kaufpreis: 249.000 EUR · 2,5 Zimmer · Wohnfläche 65,5 m²
+        Energieklasse E · 45127 Essen
+        https://example.com/listing/42
+        """,
+        "expose.pdf",
+    )
+
+    assert listing.asking_price.amount == 249000
+    assert listing.room_count == 2.5
+    assert listing.living_area_sqm == 65.5
+    assert listing.energy_class == "E"
+    assert str(listing.listing_url) == "https://example.com/listing/42"
+
+
+def test_pdf_import_listing_accepts_labelled_purchase_price_without_currency() -> None:
+    listing = _pdf_import_listing(
+        "Kaufpreis: 460120\n3 Zimmer\nWohnfläche: 82 m²\n45127 Essen",
+        "expose.pdf",
+    )
+
+    assert listing.asking_price.amount == 460120
+
+
+def test_pdf_import_listing_prefers_purchase_price_over_price_per_sqm() -> None:
+    listing = _pdf_import_listing(
+        "Kaufpreis\n460.120 €\n2.014 €/m²\n4 Zimmer\n100 m²\n40210 Düsseldorf",
+        "expose.pdf",
+    )
+
+    assert listing.asking_price.amount == 460120
 
 
 def test_api_resumes_current_human_interrupt(tmp_path) -> None:
@@ -537,6 +573,11 @@ def test_discovery_search_returns_inventory_without_auto_deals(tmp_path) -> None
     assert discovery["counts"]["complete"] >= 1
     assert discovery["counts"]["index_page"] >= 1
     assert discovery["search_calls"] >= 1
+    assert discovery["keenable_credits_used"] == (
+        discovery["search_calls"]
+        + discovery["index_fetches"]
+        + discovery["detail_fetches"]
+    )
     assert discovery["search_errors"] == []
     assert discovery["csv_path"].endswith(
         f"discovery_{discovery['search_id']}.csv"
@@ -689,6 +730,7 @@ def test_discovery_history_survives_restart(tmp_path) -> None:
     history = second.get("/discoveries").json()
     assert [item["search_id"] for item in history] == [search_id]
     run = second.get(f"/discoveries/{search_id}").json()
+    assert run["keenable_credits_used"] == search["discovery"]["keenable_credits_used"]
     assert len(run["records"]) == len(
         (tmp_path / "discoveries" / f"discovery_{search_id}.csv").read_text(
             encoding="utf-8"
