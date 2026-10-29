@@ -858,7 +858,9 @@ def test_discovery_deal_survives_a_failed_comparable_fallback(tmp_path) -> None:
     response = client.post(f"/discoveries/{search_id}/deals", json={"url": complete["url"]})
 
     assert response.status_code == 201, response.text
-    assert response.json()["state"]["comparable_selections"] == []
+    selections = response.json()["state"]["comparable_selections"]
+    assert selections
+    assert {selection["source"] for selection in selections} == {"validated_discovery_inventory"}
 
 
 def test_discovery_context_and_comparables_are_serializer_safe() -> None:
