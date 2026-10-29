@@ -555,8 +555,8 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert 'id="discovery-grid"' in page.text
     assert 'id="refresh-discoveries"' in page.text
     assert 'id="clear-discoveries"' in page.text
-    assert 'app.js?v=20261029-11' in page.text
-    assert 'styles.css?v=20261029-04' in page.text
+    assert 'app.js?v=20261029-12' in page.text
+    assert 'styles.css?v=20261029-05' in page.text
 
     script = client.get("/app/app.js")
     assert script.status_code == 200
@@ -597,6 +597,17 @@ def test_dashboard_client_renders_the_next_best_action(tmp_path) -> None:
 
     assert "Next best action" in script.text
     assert "next_best_action" in script.text
+
+
+def test_dashboard_client_separates_financial_facts_assumptions_and_outcomes(tmp_path) -> None:
+    client = fixture_client(tmp_path)
+
+    script = client.get("/app/app.js")
+
+    assert "Property facts" in script.text
+    assert "Your assumptions" in script.text
+    assert "Investment outcome" in script.text
+    assert "Confirm with the seller or broker" in script.text
 
 
 def discovery_client(tmp_path) -> TestClient:
