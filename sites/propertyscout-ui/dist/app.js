@@ -42,6 +42,19 @@ const comparisonThreadIds = new Set();
 const dealView = { city: "", status: "all", sort: "score" };
 const financialDealThreadIds = new Set(JSON.parse(localStorage.getItem("propertyscout-financial-deals") || "[]"));
 const documentDealThreadIds = new Set(JSON.parse(localStorage.getItem("propertyscout-document-deals") || "[]"));
+const documentConfirmations = JSON.parse(localStorage.getItem("propertyscout-document-confirmations") || "{}");
+
+function confirmedDocumentLabels(threadId) {
+  return new Set(documentConfirmations[threadId] || []);
+}
+
+function toggleDocumentConfirmation(threadId, label) {
+  const confirmed = confirmedDocumentLabels(threadId);
+  if (confirmed.has(label)) confirmed.delete(label);
+  else confirmed.add(label);
+  documentConfirmations[threadId] = [...confirmed];
+  localStorage.setItem("propertyscout-document-confirmations", JSON.stringify(documentConfirmations));
+}
 
 function rememberWorkspace(view) {
   activeSidebarItem = view;
@@ -1501,24 +1514,29 @@ function listingSpecificDocuments(deal) {
   return requirements.slice(0, 10);
 }
 
-function documentChecklistMarkup(title, requirements, files, className = "") {
+function documentChecklistMarkup(title, requirements, files, className = "", threadId = "") {
   const uploadedNames = files.map((file) => normalizedDocumentName(file.name));
+  const confirmed = confirmedDocumentLabels(threadId);
   const rows = requirements.map((item) => {
     const [label, keywords] = Array.isArray(item) ? item : [item.label, item.keywords];
     const purpose = Array.isArray(item) ? "Confirm this document with the broker before you commit." : item.purpose;
     const uploaded = keywords.some((keyword) => uploadedNames.some((name) => name.includes(normalizedDocumentName(keyword))));
-    return `<li class="${uploaded ? "uploaded" : "missing"}"><span aria-hidden="true">${uploaded ? "✓" : "○"}</span><span><b>${escapeHtml(label)}</b><em>Why it matters: ${escapeHtml(purpose)}</em></span><small>${uploaded ? "Uploaded" : "Request"}</small></li>`;
+    const manuallyConfirmed = confirmed.has(label);
+    const complete = uploaded || manuallyConfirmed;
+    const status = uploaded ? "Uploaded" : (manuallyConfirmed ? "Confirmed" : "Request");
+    return `<li class="${complete ? "uploaded" : "missing"}"><span aria-hidden="true">${complete ? "✓" : "○"}</span><span><b>${escapeHtml(label)}</b><em>Why it matters: ${escapeHtml(purpose)}</em></span><button type="button" class="document-confirm-button" data-document-confirm="${escapeHtml(label)}">${manuallyConfirmed ? "Unconfirm" : "Confirm item"}</button><small>${status}</small></li>`;
   }).join("");
   return `<section class="document-checklist ${escapeHtml(className)}"><h4>${escapeHtml(title)}</h4><ul>${rows}</ul></section>`;
 }
 
-function standardDocumentChecklistMarkup(files) {
+function standardDocumentChecklistMarkup(files, threadId) {
   const groups = ["Critical before an offer", "Needed for financing", "Due diligence"];
   return groups.map((group) => documentChecklistMarkup(
     group,
     STANDARD_PURCHASE_DOCUMENTS.filter((document) => document.group === group),
     files,
     group === "Critical before an offer" ? "document-checklist-critical" : "",
+    threadId,
   )).join("");
 }
 
@@ -1718,10 +1736,15 @@ function renderDashboard(deals, { showWorkspace = true } = {}) {
       const result = await response.json().catch(() => ({}));
       const files = result.files || [];
       const deal = eligibleDocumentDeals.find((item) => item.thread_id === selectedDocumentDeal());
-      documentChecklists().innerHTML = `${standardDocumentChecklistMarkup(files)}${documentChecklistMarkup("Due diligence for this listing", listingSpecificDocuments(deal || {}), files)}`;
+      const threadId = selectedDocumentDeal();
+      const confirmed = confirmedDocumentLabels(threadId);
+      const criticalDocuments = STANDARD_PURCHASE_DOCUMENTS.filter((document) => document.group === "Critical before an offer");
+      const uploadedNames = files.map((file) => normalizedDocumentName(file.name));
+      const criticalMissing = criticalDocuments.filter((document) => !confirmed.has(document.label) && !document.keywords.some((keyword) => uploadedNames.some((name) => name.includes(normalizedDocumentName(keyword))))).length;
+      documentChecklists().innerHTML = `${standardDocumentChecklistMarkup(files, threadId)}${documentChecklistMarkup("Due diligence for this listing", listingSpecificDocuments(deal || {}), files, "", threadId)}`;
       documentInventory().innerHTML = files.length
-        ? `<strong>Received & reviewed</strong><p>${files.length} document${files.length === 1 ? "" : "s"} saved for this property. Uploaded checklist items are marked on the left.</p><ul>${files.map((file) => `<li>${escapeHtml(file.name)} <span>${Number(file.bytes).toLocaleString()} bytes</span></li>`).join("")}</ul>`
-        : "<strong>Received & reviewed</strong><p>No documents saved for this property yet. Ask the broker for the critical items first.</p>";
+        ? `<strong>Received & reviewed</strong><p>${criticalMissing} critical missing · ${files.length} uploaded · ${confirmed.size} manually confirmed</p><ul>${files.map((file) => `<li>${escapeHtml(file.name)} <span>${Number(file.bytes).toLocaleString()} bytes</span></li>`).join("")}</ul>`
+        : `<strong>Received & reviewed</strong><p>${criticalMissing} critical missing · 0 uploaded · ${confirmed.size} manually confirmed</p><p>Ask the broker for the critical items first.</p>`;
     };
     dealGrid.querySelector("[data-document-upload]")?.addEventListener("click", async () => {
       const files = dealGrid.querySelector("[data-document-files]").files;
@@ -1737,6 +1760,12 @@ function renderDashboard(deals, { showWorkspace = true } = {}) {
       selectedDocumentThreadId = event.target.value;
       documentResults().hidden = true;
       documentResults().innerHTML = "";
+      showDocumentInventory();
+    });
+    documentChecklists().addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-document-confirm]");
+      if (!button) return;
+      toggleDocumentConfirmation(selectedDocumentDeal(), button.dataset.documentConfirm);
       showDocumentInventory();
     });
     dealGrid.querySelector("[data-document-review]")?.addEventListener("click", async () => {

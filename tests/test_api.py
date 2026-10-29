@@ -577,8 +577,8 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert 'id="discovery-grid"' in page.text
     assert 'id="refresh-discoveries"' in page.text
     assert 'id="clear-discoveries"' in page.text
-    assert 'app.js?v=20261029-14' in page.text
-    assert 'styles.css?v=20261029-07' in page.text
+    assert 'app.js?v=20261029-15' in page.text
+    assert 'styles.css?v=20261029-08' in page.text
 
     script = client.get("/app/app.js")
     assert script.status_code == 200
@@ -601,6 +601,8 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert "Why it matters" in script.text
     assert "Facts that match" in script.text
     assert "Contract questions" in script.text
+    assert "critical missing" in script.text
+    assert "Confirm item" in script.text
 
     stylesheet = client.get("/app/styles.css")
     assert stylesheet.status_code == 200
