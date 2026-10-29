@@ -1161,9 +1161,10 @@ function renderFinancialPanel(panel, deal) {
 function initialiseFinancialPanel(card, deal) {
   const panel = card.querySelector("[data-financial-thread]");
   if (!panel) return;
-  if (!panel.dataset.locationLoaded) {
-    panel.dataset.locationLoaded = "true";
-    loadLocationPanel(panel, deal.state?.property || {});
+  const locationSection = panel.querySelector("[data-property-location]");
+  if (locationSection && !locationSection.dataset.locationLoaded) {
+    locationSection.dataset.locationLoaded = "true";
+    loadLocationPanel(locationSection, deal.state?.property || {});
   }
   if (panel.dataset.initialised) return renderFinancialPanel(panel, deal);
   const loadScenario = (scenario) => {
@@ -2287,7 +2288,7 @@ async function startDiscoveryDeal(card, url) {
     await response.json();
     cardError.textContent = "Added to Analyze — you can keep reviewing this search.";
     cardError.hidden = false;
-    await loadDeals();
+    await loadDeals({ showWorkspace: false });
   } catch (error) {
     cardError.textContent = error.message;
     cardError.hidden = false;

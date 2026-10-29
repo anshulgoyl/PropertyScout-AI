@@ -635,7 +635,7 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert 'id="discovery-grid"' in page.text
     assert 'id="refresh-discoveries"' in page.text
     assert 'id="clear-discoveries"' in page.text
-    assert 'app.js?v=20261029-27' in page.text
+    assert 'app.js?v=20261029-28' in page.text
     assert 'styles.css?v=20261029-16' in page.text
 
     script = client.get("/app/app.js")
@@ -684,11 +684,14 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     ]
     assert 'updateWorkflowStage("analysis")' not in scout_selection_handler
     assert "Added to Analyze" in scout_selection_handler
+    assert "await loadDeals({ showWorkspace: false });" in scout_selection_handler
     assert "Property location" in script.text
     assert "Postcode-area location" in script.text
     assert "Confirm the exact position with the seller or broker" in script.text
     assert "/locations/postcodes/" in script.text
     assert "openstreetmap.org" in script.text
+    assert 'const locationSection = panel.querySelector("[data-property-location]");' in script.text
+    assert "loadLocationPanel(locationSection" in script.text
 
     styles = client.get("/app/styles.css")
     assert styles.status_code == 200
