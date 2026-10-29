@@ -576,6 +576,30 @@ main { width: min(1540px, calc(100% - 294px)); margin-left: 270px; padding-top: 
 .document-results section:last-of-type { border-bottom: 0; padding-bottom: 0; }
 .document-results strong { color: var(--ink); }
 .document-upload-panel small { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.print-summary-button { margin-left: auto; }
+
+@media print {
+  body.printing-deal { background: #fff; }
+  body.printing-deal .app-sidebar,
+  body.printing-deal .site-header,
+  body.printing-deal .hero,
+  body.printing-deal .workspace,
+  body.printing-deal #discovery,
+  body.printing-deal .deal-controls,
+  body.printing-deal .pipeline-summary,
+  body.printing-deal .deal-comparison,
+  body.printing-deal .deal-card:not(.print-target),
+  body.printing-deal .deal-delete-button,
+  body.printing-deal .decision-review-toggle,
+  body.printing-deal .print-summary-button,
+  body.printing-deal .deal-comparable-toggle { display: none !important; }
+  body.printing-deal main,
+  body.printing-deal #dashboard,
+  body.printing-deal #deal-grid,
+  body.printing-deal .deal-card.print-target { display: block !important; margin: 0; padding: 0; border: 0; box-shadow: none; }
+  body.printing-deal .deal-details { display: block !important; }
+  body.printing-deal .financial-chart canvas { max-width: 100%; }
+}
 
 /* Keep long listing titles and decision reasons inside their deal card. */
 .deal-grid > * { min-width: 0; }

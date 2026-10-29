@@ -1240,7 +1240,7 @@ function dealCard(deal) {
     <p class="deal-summary">${escapeHtml(summary)}</p>
     <button type="button" class="decision-review-toggle" data-deal-details aria-expanded="false" aria-label="${primaryDealAction(deal)}" title="${primaryDealAction(deal)}">⌄</button>
     <div class="deal-details" hidden>
-      <div class="deal-links">${dealLinks}</div>
+      <div class="deal-links">${dealLinks}<button type="button" class="ghost-button print-summary-button" data-print-summary>Print deal summary</button></div>
       ${comparablePanelHTML(state.comparable_selections || [])}
       ${propertyMetrics(property)}
       ${nextBestActionPanel(deal)}
@@ -1268,6 +1268,17 @@ function dealCard(deal) {
   card.addEventListener("focusin", () => focusWorkflowDeal(deal));
   wireComparablePanel(card, state.current_stage, comparableCount);
   wireContactPanels(card);
+  card.querySelector("[data-print-summary]")?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    document.querySelectorAll(".print-target").forEach((item) => item.classList.remove("print-target"));
+    card.classList.add("print-target");
+    document.body.classList.add("printing-deal");
+    window.print();
+    window.setTimeout(() => {
+      card.classList.remove("print-target");
+      document.body.classList.remove("printing-deal");
+    }, 0);
+  });
   card.querySelector("[data-score-explanation]")?.addEventListener("click", (event) => {
     event.stopPropagation();
     const details = card.querySelector(".deal-details");
