@@ -950,8 +950,10 @@ function financialScenarioDefaults(deal, scenario = "base") {
   return defaults;
 }
 
+const FINANCIAL_MODEL_VERSION = "v2";
+
 function financialScenarioKey(threadId, scenario) {
-  return `propertyscout-financials:${threadId}:${scenario}`;
+  return `propertyscout-financials:${FINANCIAL_MODEL_VERSION}:${threadId}:${scenario}`;
 }
 
 function negotiationTactic(deal) {
@@ -1002,7 +1004,7 @@ function financialPanel(deal) {
 function financialValues(panel, deal) {
   const scenario = panel.dataset.financialScenario || "base";
   const defaults = financialScenarioDefaults(deal, scenario);
-  const saved = JSON.parse(localStorage.getItem(financialScenarioKey(deal.thread_id, scenario)) || localStorage.getItem(`propertyscout-financials:${deal.thread_id}`) || "{}");
+  const saved = JSON.parse(localStorage.getItem(financialScenarioKey(deal.thread_id, scenario)) || "{}");
   const raw = {};
   panel.querySelectorAll("[data-financial-input]").forEach((input) => { raw[input.dataset.financialInput] = Number(input.value); });
   const values = { ...defaults, ...saved, ...raw };
