@@ -582,7 +582,7 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert 'id="discovery-grid"' in page.text
     assert 'id="refresh-discoveries"' in page.text
     assert 'id="clear-discoveries"' in page.text
-    assert 'app.js?v=20261029-20' in page.text
+    assert 'app.js?v=20261029-21' in page.text
     assert 'styles.css?v=20261029-13' in page.text
 
     script = client.get("/app/app.js")
@@ -614,6 +614,7 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert "Print deal summary" in script.text
     assert "See this in your selected deal" in script.text
     assert "Evidence ledger" in script.text
+    assert "unresolved questions" in script.text
 
     styles = client.get("/app/styles.css")
     assert styles.status_code == 200

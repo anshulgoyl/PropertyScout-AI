@@ -43,6 +43,7 @@ const dealView = { city: "", status: "all", sort: "score" };
 const financialDealThreadIds = new Set(JSON.parse(localStorage.getItem("propertyscout-financial-deals") || "[]"));
 const documentDealThreadIds = new Set(JSON.parse(localStorage.getItem("propertyscout-document-deals") || "[]"));
 const documentConfirmations = JSON.parse(localStorage.getItem("propertyscout-document-confirmations") || "{}");
+const documentReviewSummaries = JSON.parse(localStorage.getItem("propertyscout-document-review-summaries") || "{}");
 
 function confirmedDocumentLabels(threadId) {
   return new Set(documentConfirmations[threadId] || []);
@@ -54,6 +55,11 @@ function toggleDocumentConfirmation(threadId, label) {
   else confirmed.add(label);
   documentConfirmations[threadId] = [...confirmed];
   localStorage.setItem("propertyscout-document-confirmations", JSON.stringify(documentConfirmations));
+}
+
+function saveDocumentReviewSummary(threadId, summary) {
+  documentReviewSummaries[threadId] = summary;
+  localStorage.setItem("propertyscout-document-review-summaries", JSON.stringify(documentReviewSummaries));
 }
 
 function rememberWorkspace(view) {
@@ -1767,13 +1773,14 @@ function renderDashboard(deals, { showWorkspace = true } = {}) {
       const deal = eligibleDocumentDeals.find((item) => item.thread_id === selectedDocumentDeal());
       const threadId = selectedDocumentDeal();
       const confirmed = confirmedDocumentLabels(threadId);
+      const reviewSummary = documentReviewSummaries[threadId] || {};
       const criticalDocuments = STANDARD_PURCHASE_DOCUMENTS.filter((document) => document.group === "Critical before an offer");
       const uploadedNames = files.map((file) => normalizedDocumentName(file.name));
       const criticalMissing = criticalDocuments.filter((document) => !confirmed.has(document.label) && !document.keywords.some((keyword) => uploadedNames.some((name) => name.includes(normalizedDocumentName(keyword))))).length;
       documentChecklists().innerHTML = `${standardDocumentChecklistMarkup(files, threadId)}${documentChecklistMarkup("Due diligence for this listing", listingSpecificDocuments(deal || {}), files, "", threadId)}`;
       documentInventory().innerHTML = files.length
-        ? `<strong>Received & reviewed</strong><p>${criticalMissing} critical missing · ${files.length} uploaded · ${confirmed.size} manually confirmed</p><ul>${files.map((file) => `<li>${escapeHtml(file.name)} <span>${Number(file.bytes).toLocaleString()} bytes</span></li>`).join("")}</ul>`
-        : `<strong>Received & reviewed</strong><p>${criticalMissing} critical missing · 0 uploaded · ${confirmed.size} manually confirmed</p><p>Ask the broker for the critical items first.</p>`;
+        ? `<strong>Received & reviewed</strong><p>${criticalMissing} critical missing · ${files.length} uploaded · ${reviewSummary.reviewed || 0} reviewed · ${reviewSummary.unresolved || 0} unresolved questions</p><ul>${files.map((file) => `<li>${escapeHtml(file.name)} <span>${Number(file.bytes).toLocaleString()} bytes</span></li>`).join("")}</ul>`
+        : `<strong>Received & reviewed</strong><p>${criticalMissing} critical missing · 0 uploaded · ${reviewSummary.reviewed || 0} reviewed · ${reviewSummary.unresolved || 0} unresolved questions</p><p>Ask the broker for the critical items first.</p>`;
     };
     dealGrid.querySelector("[data-document-upload]")?.addEventListener("click", async () => {
       const files = dealGrid.querySelector("[data-document-files]").files;
@@ -1812,6 +1819,11 @@ function renderDashboard(deals, { showWorkspace = true } = {}) {
       const questions = (review.contract_questions || review.contract_checklist || []).map((item) => `<li class="${item.status || "check"}"><b>${escapeHtml(item.topic)}</b> — ${escapeHtml(item.guidance)}</li>`).join("");
       documentResults().innerHTML = `${matches}${discrepancies}<section><strong>Contract questions</strong><ul>${questions}</ul></section><p>${escapeHtml(review.notice)}</p>`;
       documentResults().hidden = false;
+      saveDocumentReviewSummary(selectedDocumentDeal(), {
+        reviewed: review.documents.length,
+        unresolved: (review.needs_clarification || review.discrepancies || []).length + (review.contract_questions || []).length,
+      });
+      showDocumentInventory();
       status.textContent = `${review.documents.length} document(s) reviewed.`;
     });
     showDocumentInventory();
