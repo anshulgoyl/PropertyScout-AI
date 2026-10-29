@@ -26,6 +26,27 @@ def fixture_client(tmp_path) -> TestClient:
     )
 
 
+def test_postcode_location_endpoint_returns_only_local_centroid(tmp_path) -> None:
+    client = TestClient(
+        create_app(
+            tmp_path / "api.sqlite",
+            listing_search_service=FixtureListingSearchService(),
+            postcode_index=PostcodeCoordinateIndex({"50667": (50.0, 6.0)}),
+            use_llm=False,
+        )
+    )
+
+    response = client.get("/locations/postcodes/50667")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "postcode": "50667",
+        "latitude": 50.0,
+        "longitude": 6.0,
+    }
+    assert client.get("/locations/postcodes/99999").status_code == 404
+
+
 def test_api_starts_lists_and_reads_persisted_deals(tmp_path) -> None:
     client = fixture_client(tmp_path)
 

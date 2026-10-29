@@ -808,6 +808,14 @@ def create_app(
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @application.get("/locations/postcodes/{postcode}")
+    def postcode_location(postcode: str) -> dict[str, str | float]:
+        coordinates = resolved_postcode_index.coordinates_for(postcode)
+        if coordinates is None:
+            raise HTTPException(status_code=404, detail="Postcode location not found")
+        latitude, longitude = coordinates
+        return {"postcode": postcode, "latitude": latitude, "longitude": longitude}
+
     @application.post(
         "/deals",
         response_model=DealView,

@@ -78,6 +78,13 @@ class PostcodeCoordinateIndex:
             return None
         return round(self._distance_km(first, second), 1)
 
+    def coordinates_for(self, postcode: str | None) -> tuple[float, float] | None:
+        """Return the locally stored centroid for an exact postcode."""
+
+        if not postcode:
+            return None
+        return self._coordinates.get(postcode)
+
     @staticmethod
     def _distance_km(
         first: tuple[float, float], second: tuple[float, float]
