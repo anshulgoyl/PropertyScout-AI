@@ -615,7 +615,7 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert 'id="refresh-discoveries"' in page.text
     assert 'id="clear-discoveries"' in page.text
     assert 'app.js?v=20261029-25' in page.text
-    assert 'styles.css?v=20261029-14' in page.text
+    assert 'styles.css?v=20261029-15' in page.text
 
     script = client.get("/app/app.js")
     assert script.status_code == 200
@@ -670,6 +670,10 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert ".approval-panel" in stylesheet.text
     assert ".discovery-card" in stylesheet.text
     assert ".deal-links" in stylesheet.text
+    assert '''#dashboard .deal-grid[data-stage="analyze"],
+#dashboard .deal-grid[data-stage="contact"] {
+  grid-template-columns:repeat(2, minmax(0, 1fr));
+}''' in stylesheet.text
 
 
 def test_dashboard_client_renders_evidence_confidence_and_score_drivers(tmp_path) -> None:
