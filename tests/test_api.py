@@ -577,8 +577,8 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert 'id="discovery-grid"' in page.text
     assert 'id="refresh-discoveries"' in page.text
     assert 'id="clear-discoveries"' in page.text
-    assert 'app.js?v=20261029-17' in page.text
-    assert 'styles.css?v=20261029-10' in page.text
+    assert 'app.js?v=20261029-18' in page.text
+    assert 'styles.css?v=20261029-11' in page.text
 
     script = client.get("/app/app.js")
     assert script.status_code == 200
@@ -607,6 +607,7 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert "Rent evidence" in script.text
     assert "Next action" in script.text
     assert "Print deal summary" in script.text
+    assert "See this in your selected deal" in script.text
 
     styles = client.get("/app/styles.css")
     assert styles.status_code == 200

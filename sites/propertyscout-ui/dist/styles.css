@@ -1081,5 +1081,7 @@ input,select,.input-prefix,.input-suffix { border-color:#d4dce7; border-radius:7
 .education-detail { grid-template-columns:minmax(0,1.2fr) minmax(280px,.8fr); gap:30px; margin-top:18px; padding:28px; border-color:#83bcb3; border-radius:14px; background:linear-gradient(120deg,#eef9f7,#f8fcfb); box-shadow:0 10px 24px rgba(20,87,75,.07); }
 .education-detail h3 { font-size:25px; }
 .education-detail > div:last-child { padding:4px 0 0 24px; border-left:1px solid #c8dfd9; }
+.education-deal-link { width:100%; min-height:38px; margin-top:12px; background:#173a52; font-size:12px; }
+.education-deal-link:hover { background:#102d41; }
 @media (max-width:1120px) { .education-categories { grid-template-columns:repeat(3,minmax(0,1fr)); } .education-category { min-height:66px; } .education-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media (max-width:760px) { .investor-education { padding:24px 18px; } .education-overview { margin:22px 0; } .education-overview > div { padding:12px; } .education-overview strong { font-size:20px; } .education-browser { padding:15px; } .education-browser-heading { align-items:start; flex-direction:column; gap:6px; } .education-categories,.education-grid { grid-template-columns:1fr; } .education-category { min-height:58px; } .education-detail { grid-template-columns:1fr; gap:18px; padding:21px; } .education-detail > div:last-child { padding:0; border:0; } }

@@ -292,7 +292,17 @@ function showEducationTopic(topic) {
     tile.classList.toggle("active", active);
     tile.setAttribute("aria-expanded", String(active));
   });
-  educationDetail.innerHTML = `<div><span>Investor lens</span><h3>${escapeHtml(detail.title)}</h3><p>${escapeHtml(detail.description)}</p></div><div><h4>Put it into practice</h4><ul>${detail.takeaways.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul><a href="${detail.link[1]}" target="_blank" rel="noopener">${escapeHtml(detail.link[0])} ↗</a></div>`;
+  const selectedDeal = dealsByThreadId.get(focusedWorkflowThreadId) || [...dealsByThreadId.values()][0];
+  const dealLink = selectedDeal ? `<button type="button" class="education-deal-link" data-education-deal="${escapeHtml(selectedDeal.thread_id)}">See this in your selected deal</button>` : "";
+  educationDetail.innerHTML = `<div><span>Investor lens</span><h3>${escapeHtml(detail.title)}</h3><p>${escapeHtml(detail.description)}</p></div><div><h4>Put it into practice</h4><ul>${detail.takeaways.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>${dealLink}<a href="${detail.link[1]}" target="_blank" rel="noopener">${escapeHtml(detail.link[0])} ↗</a></div>`;
+  educationDetail.querySelector("[data-education-deal]")?.addEventListener("click", (event) => {
+    const deal = dealsByThreadId.get(event.currentTarget.dataset.educationDeal);
+    if (!deal) return;
+    activeDealTab = dealPipelineTab(deal);
+    showDealWorkspace();
+    renderDashboard(Array.from(dealsByThreadId.values()));
+    dashboardSection.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
 }
 
 function wireEducationTiles() {
