@@ -218,6 +218,15 @@ button:disabled { opacity: .55; cursor: wait; }
 .score-explanation li { display: flex; justify-content: space-between; gap: 12px; padding-top: 7px; border-top: 1px solid #dce5f3; color: #405164; font-size: 12px; }
 .score-explanation li strong { color: var(--navy); }
 .score-explanation li small { color: #71809a; font-weight: 650; }
+.score-explanation li > div { display: grid; gap: 3px; }
+.evidence-confidence { display: grid; grid-template-columns: minmax(110px, .35fr) 1fr; gap: 1rem; align-items: start; padding: 1rem; border: 1px solid #d7e2de; border-radius: .9rem; background: #fff; }
+.evidence-confidence h4 { margin: .15rem 0 0; text-transform: capitalize; }
+.evidence-confidence p { margin: 0; }
+.evidence-confidence-badge { display: inline-flex; align-items: center; padding: .2rem .55rem; border: 1px solid #d7e2de; border-radius: 999px; background: #fff; font-size: .82rem; font-weight: 700; text-transform: capitalize; }
+.confidence-high { border-color: #62b698; color: #0b6a4e; }
+.confidence-medium { border-color: #e4bb62; color: #8b5a09; }
+.confidence-low { border-color: #db978e; color: #a34238; }
+.confidence-unknown { border-color: #9cacc2; color: #51637b; }
 .deal-delete-button { margin-left: auto; min-height: 30px; padding: 0 10px; border: 1px solid #edc7c2; border-radius: 8px; background: #fff7f6; color: var(--red); font-size: 11px; font-weight: 750; }
 .deal-delete-button:hover { background: #f9e4e1; }
 .compare-choice { display: inline-flex; align-items: center; gap: 5px; color: var(--green-dark); font-size: 11px; font-weight: 750; }

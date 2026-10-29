@@ -15,6 +15,7 @@ from propertyscout.config import ModelSettings
 from propertyscout.schemas import (
     AnalysisRecommendation,
     ConditionAverage,
+    EvidenceConfidence,
     FinancialMetrics,
     InvestmentAnalysis,
     InvestmentCriteria,
@@ -24,6 +25,7 @@ from propertyscout.schemas import (
     Money,
     PropertyCondition,
     PropertyListing,
+    ScoreDriver,
 )
 
 PURCHASE_COST_RATE = 0.10
@@ -353,6 +355,101 @@ def _score_components(
     }
 
 
+def _analysis_confidence(
+    property_listing: PropertyListing,
+    valuation: MarketValuation | None,
+    missing_critical_data: list[str],
+) -> EvidenceConfidence:
+    """Describe evidence quality without implying investment quality."""
+
+    if missing_critical_data:
+        labels = {
+            "living_area_sqm": "living area",
+            "market_basis": "local comparable-market evidence",
+        }
+        missing = ", ".join(labels.get(item, item.replace("_", " ")) for item in missing_critical_data)
+        return EvidenceConfidence(
+            level="low",
+            reason=f"The analysis needs {missing} before a comparable-based value can be trusted.",
+        )
+    if valuation is None:
+        return EvidenceConfidence(
+            level="unknown",
+            reason="No comparable-based valuation is available yet.",
+        )
+    if valuation.comp_count >= 8 and property_listing.annual_rent is not None:
+        return EvidenceConfidence(
+            level="high",
+            reason="The estimate uses a broad comparable set and the listing includes annual rent evidence.",
+        )
+    if valuation.comp_count >= 4:
+        return EvidenceConfidence(
+            level="medium",
+            reason="A comparable-based estimate is available, but some supporting evidence is limited.",
+        )
+    return EvidenceConfidence(
+        level="low",
+        reason="The estimate is based on a limited set of comparable listings.",
+    )
+
+
+def _score_drivers(
+    property_listing: PropertyListing,
+    valuation: MarketValuation,
+    score_components: dict[str, float],
+) -> list[ScoreDriver]:
+    """Translate internal score components into five visible investor drivers."""
+
+    rent_known = property_listing.annual_rent is not None
+    building_fields = [property_listing.build_year, property_listing.energy_class, property_listing.condition]
+    known_building_fields = sum(field is not None for field in building_fields)
+    return [
+        ScoreDriver(
+            key="price_vs_market",
+            label="Price versus market estimate",
+            detail=f"The asking price is {valuation.value_gap:+.1%} versus the comparable-based estimate.",
+            value=score_components["value_gap"],
+            maximum=SCORE_WEIGHTS["value_gap"],
+        ),
+        ScoreDriver(
+            key="comparable_evidence",
+            label="Comparable evidence quality",
+            detail=f"The estimate uses {valuation.comp_count} comparable listing{'s' if valuation.comp_count != 1 else ''}.",
+            value=score_components["comp_confidence"],
+            maximum=SCORE_WEIGHTS["comp_confidence"],
+        ),
+        ScoreDriver(
+            key="rent_evidence",
+            label="Rent evidence",
+            detail=(
+                "Annual rent is stated in the available evidence."
+                if rent_known
+                else "Annual rent is not stated, so yield cannot yet be verified."
+            ),
+            value=10.0 if rent_known else 0.0,
+            maximum=10.0,
+        ),
+        ScoreDriver(
+            key="building_energy_risk",
+            label="Building and energy risk",
+            detail=(
+                f"{known_building_fields} of 3 building and energy facts are available."
+                if known_building_fields
+                else "Build year, condition, and energy class need confirmation."
+            ),
+            value=score_components["condition_energy"],
+            maximum=SCORE_WEIGHTS["condition_energy"],
+        ),
+        ScoreDriver(
+            key="data_completeness",
+            label="Data completeness",
+            detail="Missing facts reduce confidence and should be confirmed before progressing.",
+            value=score_components["data_completeness"],
+            maximum=SCORE_WEIGHTS["data_completeness"],
+        ),
+    ]
+
+
 def analyse_property(
     property_listing: PropertyListing,
     criteria: InvestmentCriteria,
@@ -392,6 +489,7 @@ def analyse_property(
             ],
             missing_critical_data=missing,
             evidence=property_listing.evidence,
+            confidence=_analysis_confidence(property_listing, None, missing),
         )
 
     bucket = next(
@@ -492,5 +590,7 @@ def analyse_property(
         evidence=property_listing.evidence,
         valuation=valuation,
         score_components=score_components,
+        confidence=_analysis_confidence(property_listing, valuation, []),
+        score_drivers=_score_drivers(property_listing, valuation, score_components),
     )
 

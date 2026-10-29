@@ -118,6 +118,29 @@ class SourceEvidence(StrictModel):
         return str(value) if value is not None else None
 
 
+class EvidenceConfidence(StrictModel):
+    """How complete and reliable the evidence is for one decision output."""
+
+    level: Literal["high", "medium", "low", "unknown"]
+    reason: str = Field(min_length=1)
+
+
+class ScoreDriver(StrictModel):
+    """One investor-readable input to the deterministic deal score."""
+
+    key: Literal[
+        "price_vs_market",
+        "comparable_evidence",
+        "rent_evidence",
+        "building_energy_risk",
+        "data_completeness",
+    ]
+    label: str = Field(min_length=1)
+    detail: str = Field(min_length=1)
+    value: float = Field(ge=0)
+    maximum: float = Field(gt=0)
+
+
 class PropertyListing(StrictModel):
     property_id: UUID
     source_listing_id: str
@@ -262,6 +285,13 @@ class InvestmentAnalysis(StrictModel):
     evidence: list[SourceEvidence] = Field(default_factory=list)
     valuation: MarketValuation | None = None
     score_components: dict[str, float] | None = None
+    confidence: EvidenceConfidence = Field(
+        default_factory=lambda: EvidenceConfidence(
+            level="unknown",
+            reason="The available evidence has not been assessed yet.",
+        )
+    )
+    score_drivers: list[ScoreDriver] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def prevent_confident_result_with_missing_critical_data(self) -> InvestmentAnalysis:

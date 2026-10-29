@@ -51,6 +51,37 @@ def test_value_based_metrics_are_not_changed_by_the_reasoner() -> None:
     assert "Fake qualitative judgment for an offline test." in analysis.thesis
 
 
+def test_analysis_exposes_explainable_confidence_and_score_drivers() -> None:
+    analysis = analyse_property(
+        sample_properties()["shortlist"],
+        default_criteria(),
+        FakeReasoner(),
+        fixture_market_basis(),
+    )
+
+    assert analysis.confidence.level == "high"
+    assert analysis.confidence.reason
+    assert [driver.key for driver in analysis.score_drivers] == [
+        "price_vs_market",
+        "comparable_evidence",
+        "rent_evidence",
+        "building_energy_risk",
+        "data_completeness",
+    ]
+
+
+def test_missing_critical_data_has_low_analysis_confidence() -> None:
+    analysis = analyse_property(
+        sample_properties()["research"].model_copy(update={"living_area_sqm": None}),
+        default_criteria(),
+        FakeReasoner(),
+        fixture_market_basis(),
+    )
+
+    assert analysis.confidence.level == "low"
+    assert "living area" in analysis.confidence.reason.lower()
+
+
 def test_missing_area_routes_to_research() -> None:
     listing = sample_properties()["research"].model_copy(
         update={"living_area_sqm": None}

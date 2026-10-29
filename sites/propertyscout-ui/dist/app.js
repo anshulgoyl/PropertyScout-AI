@@ -476,14 +476,24 @@ const propertyMetrics = (property) => `
 function scoreExplanationPanel(analysis) {
   const score = analysis.score;
   const components = analysis.score_components;
-  if (score == null || !components) return "";
+  const drivers = Array.isArray(analysis.score_drivers) ? analysis.score_drivers : [];
+  if (score == null || (!components && !drivers.length)) return "";
   const criteria = [
     ["value_gap", "Price vs. market estimate", 45],
     ["comp_confidence", "Comparable confidence", 20],
     ["condition_energy", "Condition & energy", 20],
     ["data_completeness", "Data completeness", 15],
   ];
-  return `<section class="score-explanation" data-score-panel hidden><div><p class="eyebrow">Deal score explained</p><h4>${score}/100</h4></div><p>The score is a screening aid based on the saved listing and comparable data. It is not a valuation or investment recommendation.</p><ul>${criteria.map(([key, label, maximum]) => `<li><span>${escapeHtml(label)}</span><strong>${Number(components[key] || 0).toFixed(0)} <small>/ ${maximum}</small></strong></li>`).join("")}</ul></section>`;
+  const rows = drivers.length
+    ? drivers.map((driver) => `<li><div><span>${escapeHtml(driver.label)}</span><small>${escapeHtml(driver.detail)}</small></div><strong>${Number(driver.value || 0).toFixed(0)} <small>/ ${Number(driver.maximum || 0).toFixed(0)}</small></strong></li>`).join("")
+    : criteria.map(([key, label, maximum]) => `<li><span>${escapeHtml(label)}</span><strong>${Number(components[key] || 0).toFixed(0)} <small>/ ${maximum}</small></strong></li>`).join("");
+  return `<section class="score-explanation" data-score-panel hidden><div><p class="eyebrow">Deal score explained</p><h4>${score}/100</h4></div><p>The score is a screening aid based on the saved listing and comparable data. It is not a valuation or investment recommendation.</p><ul>${rows}</ul></section>`;
+}
+
+function evidenceConfidencePanel(analysis) {
+  const confidence = analysis?.confidence;
+  if (!confidence?.level || !confidence?.reason) return "";
+  return `<section class="evidence-confidence confidence-${escapeHtml(confidence.level)}"><div><p class="eyebrow">Evidence confidence</p><h4>${escapeHtml(confidence.level)}</h4></div><p>${escapeHtml(confidence.reason)}</p></section>`;
 }
 
 const missingDataPanel = (analysis, status) =>
@@ -1193,6 +1203,7 @@ function dealCard(deal) {
       <span>${cashFlow ? `${euros(cashFlow)}/mo` : "—"}</span>
       <span>${property.build_year ? `Built ${property.build_year}` : "—"}</span>
       <span>${property.energy_class ? `Energy ${escapeHtml(property.energy_class)}` : "—"}</span>
+      ${analysis.confidence?.level ? `<span class="evidence-confidence-badge confidence-${escapeHtml(analysis.confidence.level)}">Evidence ${escapeHtml(analysis.confidence.level)}</span>` : ""}
       <span class="listing-kind ${listingKind.uncertain ? "uncertain" : ""}" title="${escapeHtml(listingKind.detail)}">${listingKind.uncertain ? "◌" : listingKind.label.startsWith("Broker") ? "▣" : "◇"} ${escapeHtml(listingKind.label.replace(" listing", ""))}</span>
     </div>
     <p class="deal-summary">${escapeHtml(summary)}</p>
@@ -1201,6 +1212,7 @@ function dealCard(deal) {
       <div class="deal-links">${dealLinks}</div>
       ${comparablePanelHTML(state.comparable_selections || [])}
       ${propertyMetrics(property)}
+      ${evidenceConfidencePanel(analysis)}
       ${scoreExplanationPanel(analysis)}
       ${valuationPanel(state)}
       ${propertyFeaturePanel(property, analysis)}

@@ -41,6 +41,23 @@ def test_api_starts_lists_and_reads_persisted_deals(tmp_path) -> None:
     assert [deal["thread_id"] for deal in listed.json()] == [created["thread_id"]]
 
 
+def test_deal_api_exposes_analysis_confidence_and_five_score_drivers(tmp_path) -> None:
+    client = fixture_client(tmp_path)
+
+    created = client.post("/deals", json={"property_key": "shortlist"}).json()
+    analysis = created["state"]["analysis"]
+
+    assert analysis["confidence"]["level"] in {"high", "medium", "low", "unknown"}
+    assert analysis["confidence"]["reason"]
+    assert [driver["key"] for driver in analysis["score_drivers"]] == [
+        "price_vs_market",
+        "comparable_evidence",
+        "rent_evidence",
+        "building_energy_risk",
+        "data_completeness",
+    ]
+
+
 def test_pdf_import_listing_extracts_plainly_stated_property_facts() -> None:
     listing = _pdf_import_listing(
         """
@@ -504,8 +521,8 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert 'id="discovery-grid"' in page.text
     assert 'id="refresh-discoveries"' in page.text
     assert 'id="clear-discoveries"' in page.text
-    assert 'app.js?v=20261025-12' in page.text
-    assert 'styles.css?v=20261025-7' in page.text
+    assert 'app.js?v=20261029-10' in page.text
+    assert 'styles.css?v=20261029-03' in page.text
 
     script = client.get("/app/app.js")
     assert script.status_code == 200
@@ -528,6 +545,15 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert ".approval-panel" in stylesheet.text
     assert ".discovery-card" in stylesheet.text
     assert ".deal-links" in stylesheet.text
+
+
+def test_dashboard_client_renders_evidence_confidence_and_score_drivers(tmp_path) -> None:
+    client = fixture_client(tmp_path)
+
+    script = client.get("/app/app.js")
+
+    assert "Evidence confidence" in script.text
+    assert "score_drivers" in script.text
 
 
 def discovery_client(tmp_path) -> TestClient:
