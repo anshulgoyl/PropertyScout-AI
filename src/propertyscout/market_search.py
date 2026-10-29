@@ -53,6 +53,8 @@ _NON_PURCHASE_PRICE_MARKERS = (
     "provision",
     "gebühr",
     "rate",
+    "mwst",
+    "vat",
 )
 _ROOMS = re.compile(
     r"(?P<value>\d+(?:[,.]\d+)?)\s*[-\s]?\s*(?:Zi\.?|Zimmer|bedrooms?|rooms?)\b",
@@ -341,9 +343,18 @@ def _priced_amount_candidates(text: str) -> list[tuple[int, float, int]]:
                 and (cost_distance is None or purchase_distance < cost_distance)
                 else -20 if cost_distance is not None else 0
             )
+            if _is_price_per_sqm(text, start, end):
+                score = -20
             candidates.append((start, _german_number(match.group("value")), score))
 
     return sorted(set(candidates), key=lambda item: item[0])
+
+
+def _is_price_per_sqm(text: str, start: int, end: int) -> bool:
+    """Exclude unit prices from candidates for a property's total purchase price."""
+
+    nearby = text[max(0, start - 12):min(len(text), end + 24)].casefold()
+    return any(marker in nearby for marker in ("/m²", "/m2", "per m²", "per m2", "pro m²", "pro m2"))
 
 
 def _nearest_marker_distance(
