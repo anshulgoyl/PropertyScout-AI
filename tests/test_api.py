@@ -107,6 +107,20 @@ def test_document_upload_rejects_duplicate_filenames(tmp_path) -> None:
     assert "already exists" in duplicate.json()["detail"]
 
 
+def test_document_endpoints_handle_empty_folders_and_unsupported_files(tmp_path) -> None:
+    client = fixture_client(tmp_path)
+    thread_id = client.post("/deals", json={"property_key": "shortlist"}).json()["thread_id"]
+
+    assert client.get(f"/deals/{thread_id}/documents").json() == {"files": []}
+    unsupported = client.post(
+        f"/deals/{thread_id}/documents",
+        files={"files": ("archive.zip", b"not a reviewable document", "application/zip")},
+    )
+
+    assert unsupported.status_code == 415
+    assert "Unsupported file" in unsupported.json()["detail"]
+
+
 def test_pdf_import_listing_extracts_plainly_stated_property_facts() -> None:
     listing = _pdf_import_listing(
         """
