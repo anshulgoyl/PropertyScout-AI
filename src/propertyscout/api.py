@@ -1167,22 +1167,37 @@ def create_app(
             text = _document_text(path)
             extracted.append({"name": path.name, "facts": _document_facts(text), "has_text": bool(text)})
 
+        matches: list[dict[str, str]] = []
         discrepancies: list[dict[str, str]] = []
         for document in extracted:
             for field, document_value in document["facts"].items():
                 listing_value = expected.get(field)
                 if listing_value in (None, "", "not stated"):
                     continue
+                comparison = {
+                    "document": document["name"],
+                    "field": field.replace("_", " "),
+                    "listing": str(listing_value),
+                    "document_value": str(document_value),
+                }
                 if field in {"price_eur", "area_sqm"}:
                     if abs(float(document_value) - float(listing_value)) > (1 if field == "area_sqm" else 100):
-                        discrepancies.append({"document": document["name"], "field": field.replace("_", " "), "listing": str(listing_value), "document_value": str(document_value)})
+                        discrepancies.append(comparison)
+                    else:
+                        matches.append(comparison)
                 elif str(document_value).upper() != str(listing_value).upper():
-                    discrepancies.append({"document": document["name"], "field": field.replace("_", " "), "listing": str(listing_value), "document_value": str(document_value)})
+                    discrepancies.append(comparison)
+                else:
+                    matches.append(comparison)
         joined_text = "\n".join(_document_text(path) for path in target.iterdir() if path.is_file())
+        contract_checklist = _contract_checklist(joined_text)
         return {
             "documents": extracted,
+            "matches": matches,
+            "needs_clarification": discrepancies,
+            "contract_questions": [item for item in contract_checklist if item["status"] == "check"],
             "discrepancies": discrepancies,
-            "contract_checklist": _contract_checklist(joined_text),
+            "contract_checklist": contract_checklist,
             "notice": "This is a practical review aid, not legal advice. Have the notarial contract reviewed by a qualified professional before signing.",
         }
 

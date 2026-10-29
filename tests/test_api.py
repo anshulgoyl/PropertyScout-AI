@@ -63,6 +63,28 @@ def test_deal_api_exposes_analysis_confidence_and_five_score_drivers(tmp_path) -
     ]
 
 
+def test_document_review_separates_matches_gaps_and_contract_questions(tmp_path) -> None:
+    client = fixture_client(tmp_path)
+    created = client.post("/deals", json={"property_key": "shortlist"}).json()
+    thread_id = created["thread_id"]
+
+    uploaded = client.post(
+        f"/deals/{thread_id}/documents",
+        files=[
+            ("files", ("matching.txt", b"Kaufpreis: 210.000 EUR\nWohnflache: 62 m2", "text/plain")),
+            ("files", ("conflict.txt", b"Kaufpreis: 225.000 EUR\nWohnflache: 62 m2", "text/plain")),
+        ],
+    )
+    assert uploaded.status_code == 200
+
+    review = client.get(f"/deals/{thread_id}/documents/review").json()
+
+    assert any(match["field"] == "price eur" for match in review["matches"])
+    assert any(gap["document"] == "conflict.txt" for gap in review["needs_clarification"])
+    assert review["contract_questions"]
+    assert "not legal advice" in review["notice"]
+
+
 def test_pdf_import_listing_extracts_plainly_stated_property_facts() -> None:
     listing = _pdf_import_listing(
         """
@@ -555,8 +577,8 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert 'id="discovery-grid"' in page.text
     assert 'id="refresh-discoveries"' in page.text
     assert 'id="clear-discoveries"' in page.text
-    assert 'app.js?v=20261029-13' in page.text
-    assert 'styles.css?v=20261029-06' in page.text
+    assert 'app.js?v=20261029-14' in page.text
+    assert 'styles.css?v=20261029-07' in page.text
 
     script = client.get("/app/app.js")
     assert script.status_code == 200
@@ -577,6 +599,8 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert "Needed for financing" in script.text
     assert "Due diligence for this listing" in script.text
     assert "Why it matters" in script.text
+    assert "Facts that match" in script.text
+    assert "Contract questions" in script.text
 
     stylesheet = client.get("/app/styles.css")
     assert stylesheet.status_code == 200

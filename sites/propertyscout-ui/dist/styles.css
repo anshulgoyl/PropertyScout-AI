@@ -570,6 +570,9 @@ main { width: min(1540px, calc(100% - 294px)); margin-left: 270px; padding-top: 
 .document-actions button { justify-content: center; width: 100%; }
 .document-actions button:first-child { min-height: 48px; font-size: 14px; }
 .document-results { border-color: #d6e8df; background: #fff; }
+.document-results section { display: grid; gap: 5px; padding-bottom: 10px; border-bottom: 1px solid #e4eee8; }
+.document-results section:last-of-type { border-bottom: 0; padding-bottom: 0; }
+.document-results strong { color: var(--ink); }
 .document-upload-panel small { color: var(--muted); font-size: 11px; line-height: 1.45; }
 
 /* Keep long listing titles and decision reasons inside their deal card. */

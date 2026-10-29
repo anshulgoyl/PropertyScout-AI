@@ -1745,11 +1745,14 @@ function renderDashboard(deals, { showWorkspace = true } = {}) {
       const response = await fetch(`/deals/${selectedDocumentDeal()}/documents/review`);
       const review = await response.json();
       if (!response.ok) { status.textContent = review.detail || "Document review failed."; return; }
-      const discrepancies = review.discrepancies.length
-        ? `<strong>Needs clarification</strong><ul>${review.discrepancies.map((item) => `<li>${escapeHtml(item.document)}: ${escapeHtml(item.field)} is ${escapeHtml(item.document_value)}; listing shows ${escapeHtml(item.listing)}.</li>`).join("")}</ul>`
-        : "<strong>No clear contradictions found in the extracted facts.</strong>";
-      const checklist = review.contract_checklist.map((item) => `<li class="${item.status}"><b>${escapeHtml(item.topic)}</b> — ${escapeHtml(item.guidance)}</li>`).join("");
-      documentResults().innerHTML = `${discrepancies}<strong>Contract checklist</strong><ul>${checklist}</ul><p>${escapeHtml(review.notice)}</p>`;
+      const matches = (review.matches || []).length
+        ? `<section><strong>Facts that match</strong><ul>${review.matches.map((item) => `<li class="mentioned">${escapeHtml(item.document)}: ${escapeHtml(item.field)} matches the listing.</li>`).join("")}</ul></section>`
+        : "<section><strong>Facts that match</strong><p>No directly matching facts were found in the uploaded files yet.</p></section>";
+      const discrepancies = (review.needs_clarification || review.discrepancies || []).length
+        ? `<section><strong>Needs clarification</strong><ul>${(review.needs_clarification || review.discrepancies).map((item) => `<li class="check">${escapeHtml(item.document)}: ${escapeHtml(item.field)} is ${escapeHtml(item.document_value)}; listing shows ${escapeHtml(item.listing)}.</li>`).join("")}</ul></section>`
+        : "<section><strong>Needs clarification</strong><p>No clear contradictions were found in the extracted facts.</p></section>";
+      const questions = (review.contract_questions || review.contract_checklist || []).map((item) => `<li class="${item.status || "check"}"><b>${escapeHtml(item.topic)}</b> — ${escapeHtml(item.guidance)}</li>`).join("");
+      documentResults().innerHTML = `${matches}${discrepancies}<section><strong>Contract questions</strong><ul>${questions}</ul></section><p>${escapeHtml(review.notice)}</p>`;
       documentResults().hidden = false;
       status.textContent = `${review.documents.length} document(s) reviewed.`;
     });
