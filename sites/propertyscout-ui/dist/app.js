@@ -1100,6 +1100,17 @@ function renderFinancialPanel(panel, deal) {
   panel.querySelector("[data-financial-price-sqm]").textContent = property.living_area_sqm
     ? financialEuros(inputs.purchasePrice / property.living_area_sqm)
     : "n.a.";
+  const origins = ["asking price", "living area", "rooms"]
+    .map((field) => `${field}: ${factOrigin(deal, field)}`)
+    .join(" · ");
+  let originNote = panel.querySelector("[data-financial-fact-origin]");
+  if (!originNote) {
+    originNote = document.createElement("small");
+    originNote.className = "financial-fact-origin";
+    originNote.dataset.financialFactOrigin = "";
+    panel.querySelector(".financial-deal-card dl")?.after(originNote);
+  }
+  if (originNote) originNote.textContent = `Source: ${origins}. Price / m² is calculated from the first two facts.`;
   drawFinancialChart(panel.querySelector("[data-financial-chart='cashflow']"), [{ values: rows.map((row) => row.afterTaxCashFlow), color: "#0b7a52" }], { bars: true });
   drawFinancialChart(panel.querySelector("[data-financial-chart='equity']"), [{ label: "Value", values: rows.map((row) => row.propertyValue), color: "#2b5e94" }, { label: "Equity", values: rows.map((row) => row.equity), color: "#0b7a52" }]);
   drawFinancialChart(panel.querySelector("[data-financial-chart='income-costs']"), [{ label: "Income", values: rows.map((row) => row.rentalIncome), color: "#0b7a52" }, { label: "Costs", values: rows.map((row) => row.operatingCosts + row.interest + row.principal), color: "#bc7a19" }]);
@@ -1201,6 +1212,10 @@ function evidenceLedgerPanel(deal) {
   const items = deal.evidence_summary || [];
   if (!items.length) return "";
   return `<section class="evidence-ledger"><p class="eyebrow">Evidence ledger</p><h4>Where the key facts come from</h4><dl>${items.map((item) => `<div><dt>${escapeHtml(item.field)}</dt><dd>${escapeHtml(item.origin)}</dd></div>`).join("")}</dl></section>`;
+}
+
+function factOrigin(deal, field) {
+  return deal.evidence_summary?.find((item) => item.field === field)?.origin || "Needs confirmation";
 }
 
 function rejectionExplanation(deal) {
@@ -1763,6 +1778,7 @@ function renderDashboard(deals, { showWorkspace = true } = {}) {
     }
     const documentDeals = eligibleDocumentDeals.map((deal) => `<option value="${escapeHtml(deal.thread_id)}"${deal.thread_id === selectedDocumentThreadId ? " selected" : ""}>${escapeHtml(deal.state?.property?.title || "Untitled property")}</option>`).join("");
     dealGrid.innerHTML = `<section class="document-review"><div class="document-review-heading"><p class="eyebrow">Document & contract review</p><h3>Know what to request before you commit</h3><p>Choose a property, then use the checklist to request the documents that matter. Uploaded files are stored locally and marked automatically when their file name matches a checklist item.</p></div><label class="document-property-select">Property<select data-document-deal>${documentDeals}</select></label><div class="document-workspace"><aside data-document-checklists class="document-checklists"></aside><section class="document-upload-panel"><h4>Upload received documents</h4><label>Listing documents<input data-document-files type="file" multiple accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png" /></label><div class="document-actions"><button type="button" data-document-upload>Save documents locally</button><button type="button" class="ghost-button" data-document-review>Review documents</button></div><p data-document-status></p><div data-document-inventory class="document-results"></div><div data-document-results class="document-results" hidden></div><small>Files stay in this local workspace. PDF, DOCX, and text files can be reviewed immediately; scans use local OCR when it is installed.</small></section></div></section>`;
+    dealGrid.querySelector(".document-upload-panel small")?.prepend("Evidence source: files uploaded for this property. ");
     const selectedDocumentDeal = () => dealGrid.querySelector("[data-document-deal]").value;
     const documentStatus = () => dealGrid.querySelector("[data-document-status]");
     const documentResults = () => dealGrid.querySelector("[data-document-results]");

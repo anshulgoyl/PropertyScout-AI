@@ -614,8 +614,8 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert 'id="discovery-grid"' in page.text
     assert 'id="refresh-discoveries"' in page.text
     assert 'id="clear-discoveries"' in page.text
-    assert 'app.js?v=20261029-22' in page.text
-    assert 'styles.css?v=20261029-13' in page.text
+    assert 'app.js?v=20261029-23' in page.text
+    assert 'styles.css?v=20261029-14' in page.text
 
     script = client.get("/app/app.js")
     assert script.status_code == 200
@@ -690,6 +690,8 @@ def test_dashboard_client_separates_financial_facts_assumptions_and_outcomes(tmp
     assert "Your assumptions" in script.text
     assert "Investment outcome" in script.text
     assert "Confirm with the seller or broker" in script.text
+    assert "Source: " in script.text
+    assert "factOrigin" in script.text
 
 
 def discovery_client(tmp_path) -> TestClient:
