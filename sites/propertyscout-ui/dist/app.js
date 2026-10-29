@@ -980,6 +980,43 @@ function negotiationTactic(deal) {
   return `<section class="negotiation-tactic"><p class="eyebrow">Negotiation tactic</p><h5>Open at ${financialEuros(opening)} · target ${financialEuros(target)}</h5><p>${escapeHtml(rationale)}</p><small>Reference: ${financialEuros(reference)}${comparablePrices.length ? ` from ${comparablePrices.length} selected comparable${comparablePrices.length === 1 ? "" : "s"}` : " from the market valuation"}. This is a negotiation aid, not a formal appraisal.</small></section>`;
 }
 
+function locationPanel(deal) {
+  const property = deal.state?.property || {};
+  const postcode = typeof property.postal_code === "string" ? property.postal_code.trim() : "";
+  const address = typeof property.address === "string" ? property.address.trim() : "";
+  const location = dealLocation(property);
+  const mapState = postcode
+    ? "Loading postcode-area map…"
+    : "Map unavailable because this listing has no usable postcode.";
+  const addressNote = address
+    ? `<p><strong>Listing address</strong><br />${escapeHtml(address)}</p>`
+    : "<p>The listing does not state a street address.</p>";
+  return `<section class="property-location" data-property-location data-postcode="${escapeHtml(postcode)}"><div class="property-location-map" data-location-map><p>${mapState}</p></div><div class="property-location-copy"><p class="eyebrow">Property location</p><h5>${escapeHtml(location)}</h5><span class="location-precision">Postcode-area location</span>${addressNote}<p class="location-note">This map is centred on the local postcode area. Confirm the exact position with the seller or broker before relying on it.</p></div></section>`;
+}
+
+async function loadLocationPanel(panel, property) {
+  const map = panel.querySelector("[data-location-map]");
+  const postcode = panel.dataset.postcode || "";
+  if (!map || !postcode) return;
+  try {
+    const response = await fetch(`/locations/postcodes/${encodeURIComponent(postcode)}`);
+    if (!response.ok) throw new Error("Postcode location unavailable");
+    const location = await response.json();
+    const latitude = Number(location.latitude);
+    const longitude = Number(location.longitude);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) throw new Error("Invalid postcode location");
+    const span = 0.018;
+    const bbox = [longitude - span, latitude - span, longitude + span, latitude + span]
+      .map((value) => value.toFixed(6))
+      .join(",");
+    const marker = `${latitude.toFixed(6)}%2C${longitude.toFixed(6)}`;
+    const mapUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&layer=mapnik&marker=${marker}`;
+    map.innerHTML = `<iframe title="Map centred on ${escapeHtml(postcode)} postcode area" src="${mapUrl}" loading="lazy"></iframe>`;
+  } catch (error) {
+    map.innerHTML = "<p>Map unavailable for this postcode. The location details above are still taken from the listing.</p>";
+  }
+}
+
 function financialValidationPrompts(deal) {
   const property = deal.state?.property || {};
   const analysis = deal.state?.analysis || {};
@@ -1002,7 +1039,7 @@ function financialPanel(deal) {
   const basis = defaults.assumptionBasis.length
     ? `Starting values use this listing’s ${defaults.assumptionBasis.join(", ")}.`
     : "Starting values use the available listing facts. Review and adjust them for your own financing and tax position.";
-  return `<section class="financial-panel" data-financial-thread="${escapeHtml(deal.thread_id)}" data-financial-scenario="${scenario}"><div class="financial-header"><div><h4>10-year financial evaluation</h4><p>Adjust the assumptions, then use the model to compare cash flow, financing, tax and wealth over ten years.</p><p class="financial-review-reminder"><strong>Review &amp; adjust the assumptions below with the seller or broker. Keep them conservative.</strong></p></div><label class="financial-scenario">Scenario<select data-financial-scenario-select><option value="base"${scenario === "base" ? " selected" : ""}>Base case</option><option value="conservative"${scenario === "conservative" ? " selected" : ""}>Conservative</option><option value="optimistic"${scenario === "optimistic" ? " selected" : ""}>Optimistic</option></select><small>Stored for this deal in this browser</small></label></div><div class="financial-layout"><aside class="financial-deal-card"><span>Property facts</span><strong>${escapeHtml(property.title || "Untitled property")}</strong><p>${escapeHtml([property.postal_code, property.city].filter(Boolean).join(" "))}</p><div class="financial-deal-actions"><button type="button" class="ghost-button financial-documents-button">Documents & contracts</button><button type="button" class="deal-delete-button financial-delete-button">Delete deal</button></div><dl><div><dt>Purchase price</dt><dd data-financial-purchase-price>${financialEuros(price)}</dd></div><div><dt>Living area</dt><dd>${area ? `${area} m²` : "n.a."}</dd></div><div><dt>Rooms</dt><dd>${property.room_count || "n.a."}</dd></div><div><dt>Price / m²</dt><dd data-financial-price-sqm>${price && area ? financialEuros(price / area) : "n.a."}</dd></div></dl></aside><div class="financial-assumptions"><p class="eyebrow">Your assumptions</p><h5>Key assumptions</h5><p class="financial-assumption-guide">${escapeHtml(basis)}</p>${financialValidationPrompts(deal)}<button type="button" class="ghost-button financial-reset-button" data-financial-reset>Reset to listing-based values</button>${assumptionGroups}</div><div class="financial-results"><p class="eyebrow">Investment outcome</p><div class="financial-kpis"><div><span>Year 1 cash flow incl. initial cash</span><strong data-financial-metric="cashflow"></strong></div><div><span>Loan amount</span><strong data-financial-metric="loan"></strong></div><div><span>Year 10 equity</span><strong data-financial-metric="equity"></strong></div><div><span>10-year wealth effect</span><strong data-financial-metric="wealth"></strong></div><div><span>10-year ROI on initial cash</span><strong data-financial-metric="roi"></strong></div><div><span>Initial cash required</span><strong data-financial-metric="initial"></strong></div></div><div class="financial-charts"><figure><figcaption>Annual cash flow after tax, including initial cash in Year 1</figcaption><canvas data-financial-chart="cashflow" width="500" height="180"></canvas></figure><figure><figcaption>Property value vs. net equity</figcaption><canvas data-financial-chart="equity" width="500" height="180"></canvas></figure><figure><figcaption>Rental income vs. ownership costs</figcaption><canvas data-financial-chart="income-costs" width="500" height="180"></canvas></figure><figure><figcaption>Total wealth effect</figcaption><canvas data-financial-chart="wealth" width="500" height="180"></canvas></figure></div>${negotiationTactic(deal)}</div></div><div class="financial-table-wrap"><table class="financial-table"><thead><tr><th>Year</th><th>Rental income</th><th>Cash flow after tax</th><th>Property value</th><th>Net equity</th><th>Total wealth effect</th></tr></thead><tbody data-financial-table></tbody></table></div></section>`;
+  return `<section class="financial-panel" data-financial-thread="${escapeHtml(deal.thread_id)}" data-financial-scenario="${scenario}"><div class="financial-header"><div><h4>10-year financial evaluation</h4><p>Adjust the assumptions, then use the model to compare cash flow, financing, tax and wealth over ten years.</p><p class="financial-review-reminder"><strong>Review &amp; adjust the assumptions below with the seller or broker. Keep them conservative.</strong></p></div><label class="financial-scenario">Scenario<select data-financial-scenario-select><option value="base"${scenario === "base" ? " selected" : ""}>Base case</option><option value="conservative"${scenario === "conservative" ? " selected" : ""}>Conservative</option><option value="optimistic"${scenario === "optimistic" ? " selected" : ""}>Optimistic</option></select><small>Stored for this deal in this browser</small></label></div><div class="financial-layout"><aside class="financial-deal-card"><span>Property facts</span><strong>${escapeHtml(property.title || "Untitled property")}</strong><p>${escapeHtml([property.postal_code, property.city].filter(Boolean).join(" "))}</p><div class="financial-deal-actions"><button type="button" class="ghost-button financial-documents-button">Documents & contracts</button><button type="button" class="deal-delete-button financial-delete-button">Delete deal</button></div><dl><div><dt>Purchase price</dt><dd data-financial-purchase-price>${financialEuros(price)}</dd></div><div><dt>Living area</dt><dd>${area ? `${area} m²` : "n.a."}</dd></div><div><dt>Rooms</dt><dd>${property.room_count || "n.a."}</dd></div><div><dt>Price / m²</dt><dd data-financial-price-sqm>${price && area ? financialEuros(price / area) : "n.a."}</dd></div></dl></aside><div class="financial-assumptions"><p class="eyebrow">Your assumptions</p><h5>Key assumptions</h5><p class="financial-assumption-guide">${escapeHtml(basis)}</p>${financialValidationPrompts(deal)}<button type="button" class="ghost-button financial-reset-button" data-financial-reset>Reset to listing-based values</button>${assumptionGroups}</div><div class="financial-results"><p class="eyebrow">Investment outcome</p><div class="financial-kpis"><div><span>Year 1 cash flow incl. initial cash</span><strong data-financial-metric="cashflow"></strong></div><div><span>Loan amount</span><strong data-financial-metric="loan"></strong></div><div><span>Year 10 equity</span><strong data-financial-metric="equity"></strong></div><div><span>10-year wealth effect</span><strong data-financial-metric="wealth"></strong></div><div><span>10-year ROI on initial cash</span><strong data-financial-metric="roi"></strong></div><div><span>Initial cash required</span><strong data-financial-metric="initial"></strong></div></div><div class="financial-charts"><figure><figcaption>Annual cash flow after tax, including initial cash in Year 1</figcaption><canvas data-financial-chart="cashflow" width="500" height="180"></canvas></figure><figure><figcaption>Property value vs. net equity</figcaption><canvas data-financial-chart="equity" width="500" height="180"></canvas></figure><figure><figcaption>Rental income vs. ownership costs</figcaption><canvas data-financial-chart="income-costs" width="500" height="180"></canvas></figure><figure><figcaption>Total wealth effect</figcaption><canvas data-financial-chart="wealth" width="500" height="180"></canvas></figure></div>${negotiationTactic(deal)}${locationPanel(deal)}</div></div><div class="financial-table-wrap"><table class="financial-table"><thead><tr><th>Year</th><th>Rental income</th><th>Cash flow after tax</th><th>Property value</th><th>Net equity</th><th>Total wealth effect</th></tr></thead><tbody data-financial-table></tbody></table></div></section>`;
 }
 
 function financialValues(panel, deal) {
@@ -1123,7 +1160,12 @@ function renderFinancialPanel(panel, deal) {
 
 function initialiseFinancialPanel(card, deal) {
   const panel = card.querySelector("[data-financial-thread]");
-  if (!panel || panel.dataset.initialised) return renderFinancialPanel(panel, deal);
+  if (!panel) return;
+  if (!panel.dataset.locationLoaded) {
+    panel.dataset.locationLoaded = "true";
+    loadLocationPanel(panel, deal.state?.property || {});
+  }
+  if (panel.dataset.initialised) return renderFinancialPanel(panel, deal);
   const loadScenario = (scenario) => {
     panel.dataset.financialScenario = scenario;
     const saved = JSON.parse(localStorage.getItem(financialScenarioKey(deal.thread_id, scenario)) || "{}");
