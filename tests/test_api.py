@@ -635,8 +635,8 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert 'id="discovery-grid"' in page.text
     assert 'id="refresh-discoveries"' in page.text
     assert 'id="clear-discoveries"' in page.text
-    assert 'app.js?v=20261029-28' in page.text
-    assert 'styles.css?v=20261029-16' in page.text
+    assert 'app.js?v=20261029-29' in page.text
+    assert 'styles.css?v=20261029-17' in page.text
 
     script = client.get("/app/app.js")
     assert script.status_code == 200
@@ -689,7 +689,8 @@ def test_ui_dashboard_section_is_served(tmp_path) -> None:
     assert "Postcode-area location" in script.text
     assert "Confirm the exact position with the seller or broker" in script.text
     assert "/locations/postcodes/" in script.text
-    assert "openstreetmap.org" in script.text
+    assert "property-location-static-map" in script.text
+    assert "Postcode centroid" in script.text
     assert 'const locationSection = panel.querySelector("[data-property-location]");' in script.text
     assert "loadLocationPanel(locationSection" in script.text
 

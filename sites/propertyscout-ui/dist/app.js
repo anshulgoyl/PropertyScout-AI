@@ -1005,13 +1005,7 @@ async function loadLocationPanel(panel, property) {
     const latitude = Number(location.latitude);
     const longitude = Number(location.longitude);
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) throw new Error("Invalid postcode location");
-    const span = 0.018;
-    const bbox = [longitude - span, latitude - span, longitude + span, latitude + span]
-      .map((value) => value.toFixed(6))
-      .join(",");
-    const marker = `${latitude.toFixed(6)}%2C${longitude.toFixed(6)}`;
-    const mapUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&layer=mapnik&marker=${marker}`;
-    map.innerHTML = `<iframe title="Map centred on ${escapeHtml(postcode)} postcode area" src="${mapUrl}" loading="lazy"></iframe>`;
+    map.innerHTML = `<div class="property-location-static-map" role="img" aria-label="Map marker at the centre of ${escapeHtml(postcode)} postcode area"><svg viewBox="0 0 360 205" aria-hidden="true" focusable="false"><path d="M0 42H360M0 102H360M0 162H360M66 0V205M180 0V205M294 0V205"/><path class="property-location-route" d="M-8 151C65 132 89 72 155 93S247 150 368 49"/><circle class="property-location-marker-ring" cx="180" cy="102" r="25"/><circle class="property-location-marker" cx="180" cy="102" r="9"/><text x="180" y="142" text-anchor="middle">${escapeHtml(postcode)}</text></svg><span>Postcode centroid · ${latitude.toFixed(4)}, ${longitude.toFixed(4)}</span></div>`;
   } catch (error) {
     map.innerHTML = "<p>Map unavailable for this postcode. The location details above are still taken from the listing.</p>";
   }
