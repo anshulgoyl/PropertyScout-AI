@@ -563,11 +563,7 @@ def test_captured_natural_query_candidates_respect_hard_filters() -> None:
         fetch_client=FakeKeenableFetch({}),
     ).search(criteria)
 
-    assert [listing.asking_price.amount for listing in listings] == [
-        195_000.0,
-        515_000.0,
-        669_999.0,
-    ]
+    assert [listing.asking_price.amount for listing in listings] == [515_000.0, 669_999.0]
 
     assessments = {
         str(listing.listing_url): market_scout(
@@ -578,11 +574,6 @@ def test_captured_natural_query_candidates_respect_hard_filters() -> None:
     urdenbach_url = next(url for url in assessments if "xNjQxMzI2MDM" in url)
     assert assessments[urdenbach_url].matches_hard_criteria is True
     assert assessments[urdenbach_url].reasons == []
-
-    aggregator_url = next(url for url in assessments if "immobilie1.de" in url)
-    assert (
-        "Living area is below the configured minimum" in assessments[aggregator_url].reasons
-    )
 
     luisen_url = next(url for url in assessments if "xNjU4NjQ3Mzk" in url)
     assert (
@@ -616,14 +607,10 @@ def test_captured_duesseldorf_snapshots_replay_with_quarantine() -> None:
         fetch_client=FakeKeenableFetch({}),
     )
     listings = natural.search(criteria)
-    assert [listing.asking_price.amount for listing in listings] == [
-        195_000.0,
-        515_000.0,
-        669_999.0,
-    ]
+    assert [listing.asking_price.amount for listing in listings] == [515_000.0, 669_999.0]
     natural_reasons = [entry["reasons"] for entry in natural.last_rejections]
-    assert len(natural_reasons) == 7
-    assert sum("multi-listing-page" in reasons for reasons in natural_reasons) == 3
+    assert len(natural_reasons) == 8
+    assert sum("multi-listing-page" in reasons for reasons in natural_reasons) == 4
     assert sum("no-price" in reasons for reasons in natural_reasons) == 3
     assert sum("no-city-match" in reasons for reasons in natural_reasons) == 1
 
@@ -804,11 +791,7 @@ def test_fetch_error_records_failure_and_uses_fallback_query() -> None:
 
     listings = service.search(duesseldorf_criteria())
 
-    assert [listing.asking_price.amount for listing in listings] == [
-        195_000.0,
-        515_000.0,
-        669_999.0,
-    ]
+    assert [listing.asking_price.amount for listing in listings] == [515_000.0, 669_999.0]
     assert len(search.inputs) == 2
     assert service.last_fetches[0]["status"] == "fetch-error"
     assert len(fetch.calls) == 3

@@ -251,7 +251,7 @@ def test_replay_runs_all_stages_within_budgets() -> None:
     service, fetch = replay_service(detail_fetch_budget=70)
     run = service.run(benrath_criteria())
     assert run.search_calls == min(service._search_budget, len(search_queries(benrath_criteria())))
-    assert run.queries_run[0].startswith("Eigentumswohnung Düsseldorf kaufen")
+    assert run.queries_run[0] == search_queries(benrath_criteria())[0]
     assert run.index_fetches == 4  # one per captured index page
     assert run.detail_fetches == 66  # every unique child URL fetched once
     assert fetch.call_count == 66 + 4
@@ -584,12 +584,8 @@ def test_wuppertal_single_property_not_index_page() -> None:
     )
 
     assert len(records) == 1
-    assert records[0].status is DiscoveryStatus.COMPLETE
-    assert records[0].price_eur == 20_000
-    assert records[0].area_m2 == 43
-    assert records[0].rooms == 1
-    assert records[0].postal_code == "42107"
-    assert records[0].matches_criteria is False
+    assert records[0].status is DiscoveryStatus.REJECTED
+    assert records[0].reasons == ["implausible-price-per-sqm"]
     assert children == []
 
 

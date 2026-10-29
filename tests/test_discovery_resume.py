@@ -604,12 +604,12 @@ def test_resume_processes_index_pages_and_children(tmp_path: Path) -> None:
     assert outcome.index_fetches == 1
     assert outcome.children_added == 2
     assert outcome.children_fetched == 2
-    assert outcome.complete == 2  # immobilo detail + new child one
+    assert outcome.complete == 1  # immobilo detail; low-price child remains rejected
     assert outcome.incomplete == 0
-    assert outcome.rejected == 0
+    assert outcome.rejected == 1
     assert outcome.quarantined == 0
     assert outcome.fetch_failed == 1  # blocked child two
-    assert outcome.suspicious == 2  # 35k child + pre-validated 34k row
+    assert outcome.suspicious == 1  # pre-validated 34k row
 
     assert len(outcome.records) == 5  # 3 original + 2 new children
     by_url = {record.url: record for record in outcome.records}
@@ -618,13 +618,8 @@ def test_resume_processes_index_pages_and_children(tmp_path: Path) -> None:
     assert index_record.child_count == 3
     assert "index-page" in index_record.reasons
     known_child = by_url[KA_CHILD_ONE]
-    assert known_child.status is DiscoveryStatus.COMPLETE
-    assert known_child.price_eur == 35000
-    assert known_child.area_m2 == 76
-    assert known_child.rooms == 2
-    assert known_child.portal == "kleinanzeigen"
-    assert known_child.matches_criteria is True
-    assert SUSPICIOUS_PRICE_REASON in known_child.reasons  # flagged, kept complete
+    assert known_child.status is DiscoveryStatus.REJECTED
+    assert known_child.reasons == ["implausible-price-per-sqm"]
     assert by_url[KA_CHILD_TWO].status is DiscoveryStatus.FETCH_FAILED
     assert by_url[
         "https://www.yourimmo.de/immobilien/klein-aber-mein-appartement-mit-balkon-H6J2RS"
@@ -658,8 +653,8 @@ def test_resume_cli_final_batch_preserves_source(tmp_path: Path, capsys) -> None
     by_url = {r["url"]: r for r in updated}
     assert by_url[KA_INDEX]["status"] == "index_page"
     assert "index-page" in by_url[KA_INDEX]["reasons"]
-    assert by_url[KA_CHILD_ONE]["status"] == "complete"
-    assert "suspicious-price" in by_url[KA_CHILD_ONE]["reasons"]
+    assert by_url[KA_CHILD_ONE]["status"] == "rejected"
+    assert "implausible-price-per-sqm" in by_url[KA_CHILD_ONE]["reasons"]
     assert by_url[KA_CHILD_TWO]["status"] == "fetch_failed"
     assert "index fetch(es)" in capsys.readouterr().err
 
